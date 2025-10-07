@@ -3,11 +3,11 @@
 #include <Adafruit_Sensor.h>
 
 // Definir pinos dos sensores analógicos
-const int sensor1Pin = 32; // GPIO 32
-const int sensor2Pin = 33; // GPIO 33
-const int sensor3Pin = 34; // GPIO 34
-const int sensor4Pin = 35; // GPIO 35
-const int sensor5Pin = 36; // GPIO 36
+const int sensor1Pin = 0; // GPIO 0
+const int sensor2Pin = 1; // GPIO 1
+const int sensor3Pin = 2; // GPIO 2
+const int sensor4Pin = 3; // GPIO 3
+const int sensor5Pin = 4; // GPIO 4
 
 // Objeto para o MPU6050
 Adafruit_MPU6050 mpu;
@@ -20,7 +20,7 @@ void setup() {
   }
 
   // Inicializar I2C para o MPU6050
-  Wire.begin(21, 22); // SDA = GPIO 21, SCL = GPIO 22
+  Wire.begin(8, 9); // SDA = GPIO 8, SCL = GPIO 9
 
   // Inicializar o MPU6050
   if (!mpu.begin()) {
@@ -59,8 +59,8 @@ void loop() {
   Serial.print("Sensor 5: "); Serial.println(sensor5Value);
 
   // Ler dados do MPU6050
-  sensors_event_t accel, gyro, temp;
-  mpu.getEvent(&accel, &gyro, &temp);
+  sensors_event_t accel, gyro;
+  mpu.getEvent(&accel, &gyro, NULL);
 
   // Exibir dados de aceleração
   Serial.println("=== Acelerômetro (m/s²) ===");
@@ -74,10 +74,6 @@ void loop() {
   Serial.print("Y: "); Serial.print(gyro.gyro.y); Serial.print(" ");
   Serial.print("Z: "); Serial.println(gyro.gyro.z);
 
-  // Exibir temperatura (opcional)
-  Serial.println("=== Temperatura (°C) ===");
-  Serial.print("Temperatura: "); Serial.println(temp.temperature);
-
-  // Pequeno delay para não sobrecarregar o Monitor Serial
-  delay(1000);
+  // Delay de 2 segundos
+  delay(2000);
 }
