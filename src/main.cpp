@@ -1,36 +1,11 @@
 /*
- * === Projeto: Luva Tradutora de Libras ESP32-C3 ===
- * Descrição: Sistema para reconhecimento de gestos de Libras usando sensores flexíveis, MPU6050, DFPlayer e BLE.
+ * === Projeto: Luva Tradutora de Libras ESP32-C3 Super Mini ===
+ * Descrição: Sistema para reconhecimento de gestos de Libras com SD Card para armazenamento de calibração.
  * Autor: Desenvolvido com Grok (xAI)
  * Data de Início: Setembro 2025
  *
  * === Histórico de Versões ===
- * v0.1 (Inicial - Setembro 2025): Versão base com 3 palavras (MAE, PAI, AGUA), BLE, OLED, MPU6050 e DFPlayer.
- * v0.2 (Versão com Adafruit SSD1306): Migração para Adafruit_GFX e SSD1306 para compatibilidade, sem acentos.
- * v1.0 (Original): Código base com 10 palavras, travamento na inicialização.
- * v1.1 (550e8400-e29b-41d4-a716-446655440000): Reduzido para 3 palavras, ajustes em memória (SAMPLES=50), e melhor depuração.
- * v1.2 (85f43d5d-e922-49bf-bcb3-1af1540847d0, 1a3015d3-1698-4826-bbc4-28f75ff42955): Correção de debug e display.
- * v1.3 (85f43d5d-e922-49bf-bcb3-1af1540847d0, 4d1c7904-ae7d-4775-88fa-f247b7f2a938): Otimização de debug e tempo.
- * v1.4 (85f43d5d-e922-49bf-bcb3-1af1540847d0, e5401e7f-72e8-4257-a75b-16901a6ed40b): Redução de DF_TIMEOUT_MS para 2000ms.
- * v1.5 (85f43d5d-e922-49bf-bcb3-1af1540847d0, b8e9f7d2-9d4f-4e2c-8a9c-3f0b2a4e9d1c): Ajuste de OLED para 2 palavras e adição de cabeçalho.
- * v1.6 (85f43d5d-e922-49bf-bcb3-1af1540847d0, fe9dfaab-0013-4167-a804-358822eb6687): Correção de exibição de palavras e áudio de teste.
- * v1.7 (85f43d5d-e922-49bf-bcb3-1af1540847d0, d1c7e9b9-8a3f-4e6a-9e2c-5f0d1a3e4b5c): Correção do timeout do DFPlayer.
- * v1.8 (85f43d5d-e922-49bf-bcb3-1af1540847d0, b2f9e7a3-6c1d-4f8e-8e9a-2d3b5c7f1e0d): Otimização de áudio e BLE.
- * v1.9 (85f43d5d-e922-49bf-bcb3-1af1540847d0, c4e9d2f1-7b3a-4f8d-9c1e-5a6b8d2e3f9a): Correção de escopo de logMessage.
- * v1.10 (85f43d5d-e922-49bf-bcb3-1af1540847d0, 61863272-7677-4f9c-b8da-c78185baaf55): Correção de array words e validação de arquivos.
- * v1.11 (85f43d5d-e922-49bf-bcb3-1af1540847d0, a9e5f2b0-3d4e-4f9a-9c7d-2b1e8c4f5d6a): Adição de suporte a SD para calibração incremental.
- * v1.12 (85f43d5d-e922-49bf-bcb3-1af1540847d0, f3b7e9c1-4a2d-4e8e-9b2a-7c5d8e1f2a3b): Adaptação para SD integrado ao DFPlayer, redução de amostras.
- * v1.13 (85f43d5d-e922-49bf-bcb3-1af1540847d0, e7f9c2a1-5d8e-4b2a-8f9c-3a1b5d2e7f9a): Uso de EEPROM para salvar médias euclidianas.
- * v1.14 (85f43d5d-e922-49bf-bcb3-1af1540847d0, a1b2c3d4-e5f6-4g7h-8i9j-0k1l2m3n4o5p): Otimização de memória com SAMPLES=50 e alocação dinâmica.
- * v1.15 (85f43d5d-e922-49bf-bcb3-1af1540847d0, f7e9d1a2-3b4c-4d5e-9f8a-0c6b7d2e3f9b): Correção de acesso a matriz dinâmica.
- * v1.16 (85f43d5d-e922-49bf-bcb3-1af1540847d0, b9c8e7f6-3d2a-4f9e-8b5c-1e4f7a9d0b2c): Atualização da lista de palavras.
- * v1.17 (85f43d5d-e922-49bf-bcb3-1af1540847d0, ad163a5c-4511-45c3-ba49-5a72350e96c6): Ajuste para 2 segundos de captura (100 amostras).
- * v1.18 (85f43d5d-e922-49bf-bcb3-1af1540847d0, e9f2c8d1-6a3b-4e9d-8c7f-2b5d1e4f9a0b): Correção da declaração de tempMatrix em captureMovement.
- * v1.19 (85f43d5d-e922-49bf-bcb3-1af1540847d0, f4d2e9c0-8a3b-4f9d-9e7f-1b5c2d3e4f6a): Redução de SAMPLES para 50 para otimizar memória.
- * v1.20 (85f43d5d-e922-49bf-bcb3-1af1540847d0, c7e9d2f1-8a3b-4f9d-9e7f-2b5c1d3e4f6a): Redução da frequência para 25 Hz com 2 segundos.
- * v1.21 (85f43d5d-e922-49bf-bcb3-1af1540847d0, b9c8e7f6-3d2a-4f9e-8b5c-1e4f7a9d0b2c): Depuração de distâncias iguais no modo tradução.
- * v1.22 (85f43d5d-e922-49bf-bcb3-1af1540847d0, f9a2b3c4-d5e6-4f7g-8h9i-j0k1l2m3n4o5): Depuração de médias na EEPROM e calibração.
- * v1.23 (85f43d5d-e922-49bf-bcb3-1af1540847d0, 1a5b5d0a-2c1d-3e1f-4g2h-5i3j4k5l6m7n): Ajuste de precisão nos valores e calibração do MPU no modo calibração.
+ * v1.26: Integração de SD Card com remanejamento de pinos para Super Mini.
  */
 
 #include <Arduino.h>
@@ -43,140 +18,165 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-#include <EEPROM.h>
+#include <SPI.h>
+#include <SD.h>
+#include <math.h>
 
 // Declaração forward para logMessage
-void logMessage(const String& message);
+void logMessage(const String &message);
 
-// ==== PINOS E AJUSTES ====
-constexpr int DF_RX_PIN = 5;     // ESP32-C3 RX1 <- DFPlayer TX
-constexpr int DF_TX_PIN = 6;     // ESP32-C3 TX1 -> DFPlayer RX
-constexpr int MPU_SDA_PIN = 8;   // I2C SDA (MPU6050 e OLED)
-constexpr int MPU_SCL_PIN = 9;   // I2C SCL (MPU6050 e OLED)
-constexpr int FLEX_PINS[] = {0, 1, 2, 3, 4}; // GPIO 0-4 (sensores flexíveis)
-constexpr int BUTTON_PIN = 10;   // Botão de captura
-constexpr int MODE_SWITCH_PIN = 7; // Switch (HIGH = calibração, LOW = tradução)
-constexpr int LED_GREEN_PIN = 20; // LED verde (palavra reconhecida)
-constexpr int LED_RED_PIN = 21;  // LED vermelho (erro/não reconhecida)
+// ==== PINOS REMAPEADOS PARA SUPER MINI + SD ====
+constexpr int DF_RX_PIN = 1;       // UART0 RX (GPIO1)
+constexpr int DF_TX_PIN = 0;       // UART0 TX (GPIO0)
+constexpr int MPU_SDA_PIN = 2;     // I2C SDA (GPIO2)
+constexpr int MPU_SCL_PIN = 3;     // I2C SCL (GPIO3)
+constexpr int FLEX_PIN = 4;        // Apenas 1 sensor flexível disponível
+constexpr int BUTTON_PIN = 11;     // Botão de captura (removido conflito com SD_CS)
+constexpr int MODE_SWITCH_PIN = 12; // Alterna calibração/tradução
+constexpr int LED_GREEN_PIN = 8;   // LED verde (onboard)
+constexpr int LED_RED_PIN = 9;     // LED vermelho externo
+constexpr int SD_CS_PIN = 10;      // Chip Select do SD
+constexpr int SD_MISO_PIN = 5;
+constexpr int SD_MOSI_PIN = 6;
+constexpr int SD_SCK_PIN = 7;
 constexpr uint32_t DF_BAUD = 9600;
-constexpr uint8_t VOLUME = 25;   // 0..30 (máximo) 25 provisóriamente
-constexpr uint16_t FIRST_IDX = 1; // /mp3/0001.mp3 (ola)
-constexpr uint16_t LAST_IDX = 10; // /mp3/0010.mp3 (ajustado para 10 arquivos)
-constexpr uint32_t DF_TIMEOUT_MS = 3000; // Aumentado para 3000ms
-constexpr uint32_t LED_ON_MS = 1000; // Tempo LEDs acesos
-constexpr int SAMPLES = 50;      // 50 amostras em 2 segundos (25 Hz)
-constexpr int NUM_SENSORS = 11;  // 5 flex + 3 accel + 3 gyro
-constexpr int NUM_WORDS = 10;    // Ajustado para 10 palavras
-constexpr int CAPTURES_PER_WORD = 3; // 3 capturas por palavra
-constexpr int TOTAL_CAPTURES = NUM_WORDS * CAPTURES_PER_WORD; // 30 capturas
-const int BUFFER_SIZE = 200;     // Tamanho máximo do buffer de logs
-#define SCREEN_WIDTH 128 // Largura do OLED
-#define SCREEN_HEIGHT 32 // Altura do OLED
-#define OLED_RESET -1    // Reset pin (não usado, -1 se não conectado)
+constexpr uint8_t VOLUME = 25;
+constexpr uint16_t FIRST_IDX = 1;
+constexpr uint16_t LAST_IDX = 10;
+constexpr uint32_t PLAY_GAP_MS = 1500;
+constexpr uint32_t DF_TIMEOUT_MS = 3000;
+constexpr uint32_t LED_ON_MS = 1000;
+constexpr int SAMPLES = 50;            // 2 segundos @ 25 Hz
+constexpr int NUM_SENSORS = 4;         // 1 flex + 3 acelerômetros
+constexpr int NUM_WORDS = 10;
+constexpr int CAPTURES_PER_WORD = 3;
+constexpr int TOTAL_CAPTURES = NUM_WORDS * CAPTURES_PER_WORD;
+constexpr int BUFFER_SIZE = 200;
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET -1
 
 // ==== OBJETOS GLOBAIS ====
-HardwareSerial DFSerial(1);
+HardwareSerial DFSerial(0);
 DFRobotDFPlayerMini dfp;
 MPU6050 mpu(Wire);
-bool mpuInitialized = false;
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET); // Objeto OLED
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+SPIClass spiSD(HSPI);
 
-// ==== MATRIZES E ESTADO ====
+// ==== ESTADO DE EXECUÇÃO ====
 float dataMatrix[SAMPLES][NUM_SENSORS];
+uint32_t lastPlayMillis = 0;
+uint16_t currentIndex = FIRST_IDX;
 int captureCount = 0;
 bool captureMode = true;
-int capturesPerWord[NUM_WORDS] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}; // Inicializado para 10 palavras
-String words[NUM_WORDS] = {"ola", "por favor", "obrigado", "bom dia", "e", "meu", "nome", "boa tarde", "ajuda", "boa noite"}; // Nova lista de palavras sem acentos
-uint16_t currentIndex = FIRST_IDX;
-uint32_t lastPlayMillis = 0;
-bool waitingNext = true;
 bool lastModeState = true;
-char logBuffer[BUFFER_SIZE] = ""; // Buffer para acumular logs
-int bufferIndex = 0;
-int displayOffset = 0; // Para rolagem das palavras no OLED
-bool mpuCalibrated = false; // Flag para calibração do MPU
-float wordAccum[NUM_WORDS][NUM_SENSORS] = {{0.0f}};
-int wordSampleCount[NUM_WORDS] = {0};
+bool waitingNext = true;
+bool deviceConnected = false;
+bool mpuCalibrated = false;
 
-// ==== Bluetooth BLE ===
+// Acúmulo de amostras durante calibração
+float calibrationSums[NUM_WORDS][NUM_SENSORS] = {{0.0f}};
+int calibrationSampleCounts[NUM_WORDS] = {0};
+int capturesPerWord[NUM_WORDS] = {0};
+
+// Lista de palavras (sem acentuação para compatibilidade com arquivos/OLED)
+String words[NUM_WORDS] = {
+  "ola",
+  "por favor",
+  "obrigado",
+  "bom dia",
+  "e",
+  "meu",
+  "nome",
+  "boa tarde",
+  "ajuda",
+  "boa noite"
+};
+
+char logBuffer[BUFFER_SIZE] = "";
+int bufferIndex = 0;
+
+// ==== Bluetooth BLE ====
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-BLEServer *pServer = NULL;
-BLECharacteristic *pCharacteristic = NULL;
-bool deviceConnected = false;
+BLEServer *pServer = nullptr;
+BLECharacteristic *pCharacteristic = nullptr;
 
 class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
+  void onConnect(BLEServer *server) override {
     deviceConnected = true;
-    Serial.println("[BLE] Dispositivo conectado");
-    bufferIndex = 0; // Limpa buffer ao conectar
+    bufferIndex = 0;
     logBuffer[0] = '\0';
-    logMessage("[BLE] Enviando logs via BLE iniciados");
+    logMessage("[BLE] Dispositivo conectado");
   }
-  void onDisconnect(BLEServer* pServer) {
+
+  void onDisconnect(BLEServer *server) override {
     deviceConnected = false;
-    Serial.println("[BLE] Dispositivo desconectado");
+    logMessage("[BLE] Dispositivo desconectado");
     BLEDevice::startAdvertising();
   }
 };
 
-// ==== FUNÇÃO DE LOG (ACUMULA E ENVIA COM DELAY) ====
-void logMessage(const String& message) {
+// ==== LOG BUFFERIZADO PARA SERIAL E BLE ====
+void logMessage(const String &message) {
   Serial.println(message);
 
-  if (deviceConnected) {
-    int msgLength = message.length();
-    if (bufferIndex + msgLength + 1 < BUFFER_SIZE) {
-      strcpy(logBuffer + bufferIndex, message.c_str());
-      bufferIndex += msgLength;
-      logBuffer[bufferIndex++] = '\n';
-      logBuffer[bufferIndex] = '\0';
-
-      pCharacteristic->setValue(logBuffer);
-      pCharacteristic->notify();
-      delay(10);
-      Serial.println("[BLE] Log enviado: " + message); // Confirmação de envio
-    } else {
-      bufferIndex = 0;
-      strcpy(logBuffer, message.c_str());
-      bufferIndex = msgLength;
-      logBuffer[bufferIndex] = '\0';
-      pCharacteristic->setValue(logBuffer);
-      pCharacteristic->notify();
-      delay(10);
-      Serial.println("[BLE] Log enviado: " + message); // Confirmação de envio
-    }
+  if (!deviceConnected || pCharacteristic == nullptr) {
+    return;
   }
+
+  int msgLength = message.length();
+  if (bufferIndex + msgLength + 1 < BUFFER_SIZE) {
+    strcpy(logBuffer + bufferIndex, message.c_str());
+    bufferIndex += msgLength;
+    logBuffer[bufferIndex++] = '\n';
+    logBuffer[bufferIndex] = '\0';
+  } else {
+    bufferIndex = 0;
+    strcpy(logBuffer, message.c_str());
+    bufferIndex = msgLength;
+    logBuffer[bufferIndex++] = '\n';
+    logBuffer[bufferIndex] = '\0';
+  }
+
+  pCharacteristic->setValue(reinterpret_cast<uint8_t *>(logBuffer), bufferIndex);
+  pCharacteristic->notify();
+  delay(10);
 }
 
-// ==== LOG DE EVENTOS DO DFPLAYER ====
+// ==== UTILITÁRIOS DO DFPLAYER ====
 void printDFEvent(uint8_t type, int value) {
-  if (type == 11 && value == 2) return; // Ignorar evento desconhecido repetitivo
+  if (type == 11 && value == 2) {
+    return; // ruído recorrente
+  }
+
   String message;
   switch (type) {
-    case DFPlayerCardInserted:  message = F("[DFP] Cartao SD inserido"); break;
-    case DFPlayerCardRemoved:   message = F("[DFP] Cartao SD removido"); break;
-    case DFPlayerCardOnline:    message = F("[DFP] Cartao SD online"); break;
-    case DFPlayerUSBInserted:   message = F("[DFP] USB inserido"); break;
-    case DFPlayerUSBRemoved:    message = F("[DFP] USB removido"); break;
-    case DFPlayerUSBOnline:     message = F("[DFP] USB online"); break;
-    case DFPlayerPlayFinished:  message = "[DFP] Terminado faixa: " + String(value);
-                                waitingNext = true;
-                                lastPlayMillis = millis();
-                                logMessage("[DFP] Faixa terminada: " + String(value));
-                                break;
+    case DFPlayerCardInserted:
+      message = F("[DFP] Cartao SD inserido");
+      break;
+    case DFPlayerCardRemoved:
+      message = F("[DFP] Cartao SD removido");
+      break;
+    case DFPlayerCardOnline:
+      message = F("[DFP] Cartao SD online");
+      break;
+    case DFPlayerUSBInserted:
+      message = F("[DFP] USB inserido");
+      break;
+    case DFPlayerUSBRemoved:
+      message = F("[DFP] USB removido");
+      break;
+    case DFPlayerUSBOnline:
+      message = F("[DFP] USB online");
+      break;
+    case DFPlayerPlayFinished:
+      message = "[DFP] Faixa finalizada: " + String(value);
+      waitingNext = true;
+      lastPlayMillis = millis();
+      break;
     case DFPlayerError:
-      message = F("[DFP] Erro: ");
-      switch (value) {
-        case Busy:             message += F("Ocupado"); break;
-        case Sleeping:         message += F("Dormindo"); break;
-        case SerialWrongStack: message += F("Pilha serial errada"); break;
-        case CheckSumNotMatch: message += F("Checksum nao corresponde"); break;
-        case FileIndexOut:     message += F("Indice de arquivo fora"); break;
-        case FileMismatch:     message += F("Arquivo nao corresponde"); break;
-        case Advertise:        message += F("Publicidade"); break;
-        default:               message += "Desconhecido (" + String(value) + ")"; break;
-      }
+      message = F("[DFP] Erro detectado");
       waitingNext = true;
       digitalWrite(LED_RED_PIN, HIGH);
       delay(LED_ON_MS);
@@ -192,14 +192,13 @@ void printDFEvent(uint8_t type, int value) {
       message = "[DFP] Evento desconhecido: tipo=" + String(type) + " valor=" + String(value);
       break;
   }
+
   logMessage(message);
 }
 
-// ==== TOCAR POR ÍNDICE (/mp3/000N.mp3) ====
 bool playIndex(uint16_t idx) {
   if (idx < FIRST_IDX || idx > LAST_IDX) {
-    String msg = "[DFP] Indice fora do range";
-    logMessage(msg);
+    logMessage("[DFP] Indice fora do range: " + String(idx));
     digitalWrite(LED_RED_PIN, HIGH);
     delay(LED_ON_MS);
     digitalWrite(LED_RED_PIN, LOW);
@@ -207,33 +206,30 @@ bool playIndex(uint16_t idx) {
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("Indice fora do range");
+    display.println("Indice invalido");
     display.display();
     return false;
   }
 
-  String msg = "[DFP] Enviando comando para /mp3/" + String(idx, DEC) + ".mp3 (" + (idx <= NUM_WORDS ? words[idx - 1] : "desconhecido") + ")";
-  logMessage(msg);
+  logMessage("[DFP] Reproduzindo indice " + String(idx) + " (" + words[min(idx - 1, static_cast<uint16_t>(NUM_WORDS - 1))] + ")");
   dfp.playMp3Folder(idx);
   waitingNext = false;
   currentIndex = idx;
-  lastPlayMillis = millis();
 
-  unsigned long startTime = millis();
-  while (millis() - startTime < DF_TIMEOUT_MS) {
+  unsigned long start = millis();
+  while (millis() - start < DF_TIMEOUT_MS) {
     if (dfp.available()) {
       uint8_t type = dfp.readType();
       int value = dfp.read();
-      String eventMsg = "[DFP] Evento recebido: tipo=" + String(type) + ", valor=" + String(value);
-      logMessage(eventMsg);
+      printDFEvent(type, value);
       if (type == DFPlayerPlayFinished) {
-        logMessage("[DFP] Faixa terminada detectada");
-        return true; // Aceita qualquer término como sucesso
+        return true;
       }
     }
   }
-  String timeoutMsg = "[DFP] Timeout aguardando resposta do DFPlayer após " + String(DF_TIMEOUT_MS) + "ms";
-  logMessage(timeoutMsg);
+
+  logMessage("[DFP] Timeout aguardando termino do audio");
+  waitingNext = true;
   digitalWrite(LED_RED_PIN, HIGH);
   delay(LED_ON_MS);
   digitalWrite(LED_RED_PIN, LOW);
@@ -241,61 +237,94 @@ bool playIndex(uint16_t idx) {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("Timeout DFPlayer");
+  display.println("Timeout audio");
   display.display();
-  waitingNext = true;
   return false;
 }
 
-// ==== CALCULAR MÉDIA POR SENSOR ====
-void calculateMean(int wordIndex, float meanVector[NUM_SENSORS]) {
-  if (wordIndex < 0 || wordIndex >= NUM_WORDS) {
-    memset(meanVector, 0, NUM_SENSORS * sizeof(float));
+// ==== SD CARD HELPERS ====
+String meanFilenameForWord(int wordIndex) {
+  return "/" + words[wordIndex] + "_mean.csv";
+}
+
+void saveMeanToSD(int wordIndex, const float meanVector[NUM_SENSORS]) {
+  String filename = meanFilenameForWord(wordIndex);
+  File file = SD.open(filename, FILE_WRITE);
+  if (!file) {
+    logMessage("[SD] Falha ao abrir arquivo para escrita: " + filename);
     return;
   }
 
-  if (wordSampleCount[wordIndex] == 0) {
-    memset(meanVector, 0, NUM_SENSORS * sizeof(float));
-  } else {
-    for (int j = 0; j < NUM_SENSORS; j++) {
-      meanVector[j] = wordAccum[wordIndex][j] / static_cast<float>(wordSampleCount[wordIndex]);
+  file.println("Sensor,Valor");
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    file.println(String(j) + "," + String(meanVector[j], 5));
+  }
+  file.close();
+  logMessage("[SD] Media salva em " + filename);
+}
+
+bool loadMeanFromSD(int wordIndex, float meanVector[NUM_SENSORS]) {
+  String filename = meanFilenameForWord(wordIndex);
+  File file = SD.open(filename, FILE_READ);
+  if (!file) {
+    logMessage("[SD] Media nao encontrada para '" + words[wordIndex] + "'");
+    for (int j = 0; j < NUM_SENSORS; ++j) {
+      meanVector[j] = NAN;
+    }
+    return false;
+  }
+
+  int lineNumber = 0;
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    if (line.isEmpty()) {
+      continue;
+    }
+    if (lineNumber == 0) {
+      lineNumber++;
+      continue; // cabeçalho
+    }
+    int commaIndex = line.indexOf(',');
+    if (commaIndex < 0) {
+      continue;
+    }
+    int sensor = line.substring(0, commaIndex).toInt();
+    float value = line.substring(commaIndex + 1).toFloat();
+    if (sensor >= 0 && sensor < NUM_SENSORS) {
+      meanVector[sensor] = value;
+    }
+    lineNumber++;
+  }
+  file.close();
+
+  String debug = "=== Media carregada para '" + words[wordIndex] + "' ===\n";
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    debug += "Sensor " + String(j) + ": " + String(meanVector[j], 5) + "\n";
+  }
+  logMessage(debug);
+  return true;
+}
+
+void resetCalibrationState() {
+  captureCount = 0;
+  for (int i = 0; i < NUM_WORDS; ++i) {
+    capturesPerWord[i] = 0;
+    calibrationSampleCounts[i] = 0;
+    for (int j = 0; j < NUM_SENSORS; ++j) {
+      calibrationSums[i][j] = 0.0f;
     }
   }
-
-  String meanDebug = "=== Media Calculada para '" + words[wordIndex] + "' ===\n";
-  for (int j = 0; j < NUM_SENSORS; j++) {
-    meanDebug += "Sensor " + String(j) + ": " + String(meanVector[j], 4) + "\n";
-  }
-  logMessage(meanDebug);
+  mpuCalibrated = false;
 }
 
-// ==== SALVAR MÉDIA NA EEPROM ====
-void saveMeanToEEPROM(int wordIndex, const float meanVector[NUM_SENSORS]) {
-  int address = wordIndex * (NUM_SENSORS * sizeof(float));
-  EEPROM.put(address, meanVector);
-  EEPROM.commit();
-  logMessage("[EEPROM] Salva media para '" + words[wordIndex] + "' em endereco " + String(address));
-}
-
-// ==== CARREGAR MÉDIA DA EEPROM ====
-void loadMeanFromEEPROM(int wordIndex, float meanVector[NUM_SENSORS]) {
-  int address = wordIndex * (NUM_SENSORS * sizeof(float));
-  EEPROM.get(address, meanVector);
-  String meanDebug = "=== Media Carregada para '" + words[wordIndex] + "' ===\n";
-  for (int j = 0; j < NUM_SENSORS; j++) {
-    meanDebug += "Sensor " + String(j) + ": " + String(meanVector[j], 4) + "\n";
-  }
-  logMessage(meanDebug);
-}
-
-// ==== CAPTURAR MOVIMENTO ====
+// ==== CAPTURA DE MOVIMENTO ====
 void captureMovement() {
   int wordIndex = captureCount / CAPTURES_PER_WORD;
-  String currentWord = words[wordIndex];
   int captureIndex = capturesPerWord[wordIndex];
 
-  String msg = "Capturando movimento " + String(captureIndex + 1) + " para a palavra: " + currentWord;
-  logMessage(msg);
+  String header = "Capturando movimento " + String(captureIndex + 1) + " para: " + words[wordIndex];
+  logMessage(header);
 
   display.clearDisplay();
   display.setTextSize(1);
@@ -303,129 +332,119 @@ void captureMovement() {
   display.setCursor(0, 0);
   display.println("Capturando:");
   display.setCursor(0, 10);
-  display.println(currentWord);
-  display.setCursor(60, 10);
+  display.println(words[wordIndex]);
+  display.setCursor(0, 20);
   display.print("Mov ");
   display.print(captureIndex + 1);
   display.display();
 
+  float captureSums[NUM_SENSORS] = {0.0f};
   bool mpuError = false;
-  for (int i = 0; i < SAMPLES; i++) {
-    dataMatrix[i][0] = analogRead(FLEX_PINS[0]) / 4095.0f;
-    dataMatrix[i][1] = analogRead(FLEX_PINS[1]) / 4095.0f;
-    dataMatrix[i][2] = analogRead(FLEX_PINS[2]) / 4095.0f;
-    dataMatrix[i][3] = analogRead(FLEX_PINS[3]) / 4095.0f;
-    dataMatrix[i][4] = analogRead(FLEX_PINS[4]) / 4095.0f;
+
+  for (int i = 0; i < SAMPLES; ++i) {
+    dataMatrix[i][0] = analogRead(FLEX_PIN) / 4095.0f;
+    captureSums[0] += dataMatrix[i][0];
 
     mpu.update();
-    if (mpu.getAccX() != 0 || mpu.getAccY() != 0 || mpu.getAccZ() != 0) {
-      dataMatrix[i][5] = mpu.getAccX() / 2.0f; // Ajustado para maior precisão (±16g padrão)
-      dataMatrix[i][6] = mpu.getAccY() / 2.0f;
-      dataMatrix[i][7] = mpu.getAccZ() / 2.0f;
-      dataMatrix[i][8] = mpu.getGyroX() / 250.0f; // Ajustado para maior precisão (±250°/s)
-      dataMatrix[i][9] = mpu.getGyroY() / 250.0f;
-      dataMatrix[i][10] = mpu.getGyroZ() / 250.0f;
+    float accX = mpu.getAccX();
+    float accY = mpu.getAccY();
+    float accZ = mpu.getAccZ();
+    if (accX != 0.0f || accY != 0.0f || accZ != 0.0f) {
+      dataMatrix[i][1] = accX / 2.0f;
+      dataMatrix[i][2] = accY / 2.0f;
+      dataMatrix[i][3] = accZ / 2.0f;
     } else {
       mpuError = true;
-      String errMsg = "Erro ao ler MPU6050 na amostra " + String(i);
-      logMessage(errMsg);
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(LED_ON_MS);
-      digitalWrite(LED_RED_PIN, LOW);
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(0, 0);
-      display.println("Erro MPU6050");
-      display.display();
-      for (int j = 5; j < NUM_SENSORS; j++) {
-        dataMatrix[i][j] = 0.0f;
-      }
+      dataMatrix[i][1] = dataMatrix[i][2] = dataMatrix[i][3] = 0.0f;
     }
-    delay(40); // 40ms por amostra para 50 amostras em 2 segundos (25 Hz)
+
+    captureSums[1] += dataMatrix[i][1];
+    captureSums[2] += dataMatrix[i][2];
+    captureSums[3] += dataMatrix[i][3];
+
+    delay(40);
   }
 
-  String matrixMsg = "=== Matriz Capturada ===\n";
-  for (int i = 0; i < SAMPLES; i++) {
-    matrixMsg += "Amostra " + String(i) + ": ";
-    for (int j = 0; j < NUM_SENSORS; j++) {
-      matrixMsg += String(dataMatrix[i][j], 4) + " ";
-    }
-    matrixMsg += "\n";
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    calibrationSums[wordIndex][j] += captureSums[j];
   }
-  logMessage(matrixMsg);
-
-  for (int j = 0; j < NUM_SENSORS; j++) {
-    float columnSum = 0.0f;
-    for (int i = 0; i < SAMPLES; i++) {
-      columnSum += dataMatrix[i][j];
-    }
-    wordAccum[wordIndex][j] += columnSum;
-  }
-  wordSampleCount[wordIndex] += SAMPLES;
-
-  String confirmMsg = "Captura " + String(captureIndex + 1) + " da palavra " + currentWord + " OK";
-  logMessage(confirmMsg);
+  calibrationSampleCounts[wordIndex] += SAMPLES;
 
   capturesPerWord[wordIndex]++;
   captureCount++;
 
+  logMessage("Captura " + String(captureIndex + 1) + " concluida para '" + words[wordIndex] + "'");
+
+  if (mpuError) {
+    logMessage("[MPU] Algumas leituras retornaram zero. Verifique sensores.");
+  }
+
   if (capturesPerWord[wordIndex] == CAPTURES_PER_WORD) {
-    float meanVector[NUM_SENSORS] = {0.0f};
-    calculateMean(wordIndex, meanVector);
-    saveMeanToEEPROM(wordIndex, meanVector);
+    float meanVector[NUM_SENSORS];
+    for (int j = 0; j < NUM_SENSORS; ++j) {
+      if (calibrationSampleCounts[wordIndex] > 0) {
+        meanVector[j] = calibrationSums[wordIndex][j] /
+                        static_cast<float>(calibrationSampleCounts[wordIndex]);
+      } else {
+        meanVector[j] = 0.0f;
+      }
+    }
+    saveMeanToSD(wordIndex, meanVector);
   }
 
   if (captureCount >= TOTAL_CAPTURES) {
-    String endMsg = "Captura de 3 movimentos por palavra concluida! Entrando em modo de traducao.";
-    logMessage(endMsg);
+    logMessage("Calibracao concluida! Entrando em modo traducao.");
     captureMode = false;
     lastModeState = false;
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("Modo Traducao");
+    display.println("Modo traducao");
     display.setCursor(0, 10);
     display.println("Pressione botao");
     display.display();
-    playIndex(FIRST_IDX); // Toca áudio de teste após calibração
+    playIndex(FIRST_IDX);
   }
 }
 
-// ==== CALCULAR DISTÂNCIA EUCLIDIANA ====
-float calculateDistance(float matrix1[SAMPLES][NUM_SENSORS], const float meanVector2[NUM_SENSORS]) {
-  float distance = 0.0f;
-  for (int i = 0; i < SAMPLES; i++) {
-    for (int j = 0; j < NUM_SENSORS; j++) {
-      float diff = matrix1[i][j] - meanVector2[j];
-      distance += diff * diff;
+// ==== RECONHECIMENTO ====
+void computeCaptureMean(float meanVector[NUM_SENSORS]) {
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    meanVector[j] = 0.0f;
+  }
+
+  for (int i = 0; i < SAMPLES; ++i) {
+    for (int j = 0; j < NUM_SENSORS; ++j) {
+      meanVector[j] += dataMatrix[i][j];
     }
   }
-  float normalizedDistance = sqrt(distance / (SAMPLES * NUM_SENSORS));
-  logMessage("[Debug] Distancia calculada (bruta): " + String(distance, 4) + ", normalizada: " + String(normalizedDistance, 4));
-  return normalizedDistance;
+
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    meanVector[j] /= static_cast<float>(SAMPLES);
+  }
 }
 
-// ==== MODO DE LEITURA E RECONHECIMENTO ====
+float calculateDistance(const float vec1[NUM_SENSORS], const float vec2[NUM_SENSORS]) {
+  float sum = 0.0f;
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    float diff = vec1[j] - vec2[j];
+    sum += diff * diff;
+  }
+  return sqrtf(sum);
+}
+
 void readAndRecognize() {
   if (!waitingNext) {
-    if (millis() - lastPlayMillis > DF_TIMEOUT_MS) {
-      String msg = "[DFP] Timeout aguardando audio. Liberando para nova tentativa.";
-      logMessage(msg);
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(LED_ON_MS / 2);
-      digitalWrite(LED_RED_PIN, LOW);
-      waitingNext = true;
-    } else {
-      String msg = "[Gesture] Aguardando termino do audio anterior...";
-      logMessage(msg);
+    if (millis() - lastPlayMillis < PLAY_GAP_MS) {
+      logMessage("[Gesture] Aguardando termino do audio atual...");
       return;
     }
+    waitingNext = true;
   }
 
-  String msg = "Capturando novo movimento para reconhecimento...";
-  logMessage(msg);
+  logMessage("Capturando movimento para traducao...");
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -434,70 +453,64 @@ void readAndRecognize() {
   display.display();
 
   bool mpuError = false;
-  for (int i = 0; i < SAMPLES; i++) {
-    dataMatrix[i][0] = analogRead(FLEX_PINS[0]) / 4095.0f;
-    dataMatrix[i][1] = analogRead(FLEX_PINS[1]) / 4095.0f;
-    dataMatrix[i][2] = analogRead(FLEX_PINS[2]) / 4095.0f;
-    dataMatrix[i][3] = analogRead(FLEX_PINS[3]) / 4095.0f;
-    dataMatrix[i][4] = analogRead(FLEX_PINS[4]) / 4095.0f;
+  for (int i = 0; i < SAMPLES; ++i) {
+    dataMatrix[i][0] = analogRead(FLEX_PIN) / 4095.0f;
 
     mpu.update();
-    if (mpu.getAccX() != 0 || mpu.getAccY() != 0 || mpu.getAccZ() != 0) {
-      dataMatrix[i][5] = mpu.getAccX() / 2.0f; // Ajustado para maior precisão (±16g padrão)
-      dataMatrix[i][6] = mpu.getAccY() / 2.0f;
-      dataMatrix[i][7] = mpu.getAccZ() / 2.0f;
-      dataMatrix[i][8] = mpu.getGyroX() / 250.0f; // Ajustado para maior precisão (±250°/s)
-      dataMatrix[i][9] = mpu.getGyroY() / 250.0f;
-      dataMatrix[i][10] = mpu.getGyroZ() / 250.0f;
+    float accX = mpu.getAccX();
+    float accY = mpu.getAccY();
+    float accZ = mpu.getAccZ();
+    if (accX != 0.0f || accY != 0.0f || accZ != 0.0f) {
+      dataMatrix[i][1] = accX / 2.0f;
+      dataMatrix[i][2] = accY / 2.0f;
+      dataMatrix[i][3] = accZ / 2.0f;
     } else {
       mpuError = true;
-      String errMsg = "Erro ao ler MPU6050 na amostra " + String(i);
-      logMessage(errMsg);
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(LED_ON_MS / 2);
-      digitalWrite(LED_RED_PIN, LOW);
-      for (int j = 5; j < NUM_SENSORS; j++) {
-        dataMatrix[i][j] = 0.0f;
-      }
+      dataMatrix[i][1] = dataMatrix[i][2] = dataMatrix[i][3] = 0.0f;
     }
-    delay(40); // 40ms por amostra para 50 amostras em 2 segundos (25 Hz)
+
+    delay(40);
   }
 
-  String matrixDebug = "=== Matriz Capturada para Reconhecimento ===\n";
-  for (int i = 0; i < SAMPLES; i++) {
-    matrixDebug += "Amostra " + String(i) + ": ";
-    for (int j = 0; j < NUM_SENSORS; j++) {
-      matrixDebug += String(dataMatrix[i][j], 4) + " ";
+  float captureMean[NUM_SENSORS];
+  computeCaptureMean(captureMean);
+
+  String captureDebug = "=== Media capturada ===\n";
+  for (int j = 0; j < NUM_SENSORS; ++j) {
+    captureDebug += "Sensor " + String(j) + ": " + String(captureMean[j], 5) + "\n";
+  }
+  logMessage(captureDebug);
+
+  float distances[NUM_WORDS];
+  for (int w = 0; w < NUM_WORDS; ++w) {
+    float storedMean[NUM_SENSORS];
+    bool haveMean = loadMeanFromSD(w, storedMean);
+    if (!haveMean) {
+      distances[w] = INFINITY;
+      continue;
     }
-    matrixDebug += "\n";
-  }
-  logMessage(matrixDebug);
-
-  float avgDistances[NUM_WORDS] = {0.0f};
-  for (int w = 0; w < NUM_WORDS; w++) {
-    float loadedMean[NUM_SENSORS] = {0.0f};
-    loadMeanFromEEPROM(w, loadedMean);
-    avgDistances[w] = calculateDistance(dataMatrix, loadedMean);
+    distances[w] = calculateDistance(captureMean, storedMean);
   }
 
-  String distMsg = "=== Distancias Medias ===\n";
-  for (int w = 0; w < NUM_WORDS; w++) {
-    distMsg += "Distancia para " + words[w] + ": " + String(avgDistances[w], 4) + "\n";
-  }
-  logMessage(distMsg);
-
-  float minDist = avgDistances[0];
-  int minIndex = 0;
-  for (int w = 1; w < NUM_WORDS; w++) {
-    if (avgDistances[w] < minDist) {
-      minDist = avgDistances[w];
-      minIndex = w;
+  int bestIndex = -1;
+  float bestDistance = INFINITY;
+  for (int w = 0; w < NUM_WORDS; ++w) {
+    if (distances[w] < bestDistance) {
+      bestDistance = distances[w];
+      bestIndex = w;
     }
   }
 
-  if (minDist < 10.0f && !mpuError) {
-    String recMsg = "Palavra reconhecida: " + words[minIndex];
-    logMessage(recMsg);
+  String distLog = "=== Distancias ===\n";
+  for (int w = 0; w < NUM_WORDS; ++w) {
+    distLog += words[w] + ": " + (isinf(distances[w]) ? String("N/A") : String(distances[w], 5)) + "\n";
+  }
+  logMessage(distLog);
+
+  const float RECOGNITION_THRESHOLD = 0.35f; // ajustado empiricamente
+  if (bestIndex >= 0 && bestDistance < RECOGNITION_THRESHOLD && !mpuError) {
+    String success = "Reconhecida: " + words[bestIndex] + " (" + String(bestDistance, 5) + ")";
+    logMessage(success);
     digitalWrite(LED_GREEN_PIN, HIGH);
     display.clearDisplay();
     display.setTextSize(1);
@@ -505,14 +518,13 @@ void readAndRecognize() {
     display.setCursor(0, 0);
     display.println("Reconhecida:");
     display.setCursor(0, 10);
-    display.println(words[minIndex]);
+    display.println(words[bestIndex]);
     display.display();
-    playIndex(minIndex + 1);
+    playIndex(bestIndex + 1);
     delay(LED_ON_MS / 2);
     digitalWrite(LED_GREEN_PIN, LOW);
   } else {
-    String noRecMsg = "Palavra nao reconhecida ou erro no MPU6050.";
-    logMessage(noRecMsg);
+    logMessage("Gestos nao correspondem a palavras calibradas.");
     digitalWrite(LED_RED_PIN, HIGH);
     display.clearDisplay();
     display.setTextSize(1);
@@ -524,53 +536,76 @@ void readAndRecognize() {
     digitalWrite(LED_RED_PIN, LOW);
   }
 
-  String readyMsg = "Pronto para nova captura. Pressione o botao.";
-  logMessage(readyMsg);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("Pronto para");
+  display.println("Pressione botao");
   display.setCursor(0, 10);
-  display.println("nova captura");
+  display.println("para novo gesto");
   display.display();
 }
 
 // ==== SETUP ====
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {}
-
-  logMessage("\n=== Luva Tradutora de Libras ESP32-C3 ===");
-
-  // Configurar pinos
-  for (int i = 0; i < 5; i++) {
-    pinMode(FLEX_PINS[i], INPUT);
+  while (!Serial) {
+    delay(10);
   }
+
+  logMessage("\n=== Luva Tradutora v1.26 ===");
+
+  pinMode(FLEX_PIN, INPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
   digitalWrite(LED_GREEN_PIN, LOW);
   digitalWrite(LED_RED_PIN, LOW);
-  logMessage("[Setup] Pinos configurados.");
 
-  // Inicializar I2C
   Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
   Wire.setClock(100000);
-  logMessage("[Setup] I2C inicializado.");
 
-  // Inicializar OLED Adafruit
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Tente 0x3D se 0x3C falhar
-    logMessage("[OLED] Erro ao inicializar display!");
-    while (1) {
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(500);
-      digitalWrite(LED_RED_PIN, LOW);
-      delay(500);
+  byte status = mpu.begin();
+  if (status != 0) {
+    logMessage("[MPU] Falha ao inicializar. Status: " + String(status));
+    while (true) {
+      digitalWrite(LED_RED_PIN, !digitalRead(LED_RED_PIN));
+      delay(250);
     }
   }
-  display.setRotation(2); // Rotação 180 graus
+  logMessage("[MPU] Inicializado com sucesso");
+
+  DFSerial.begin(DF_BAUD, SERIAL_8N1, DF_RX_PIN, DF_TX_PIN);
+  logMessage("[DFP] Inicializando...");
+  if (!dfp.begin(DFSerial, true, true)) {
+    logMessage("[DFP] Falha ao inicializar");
+    while (true) {
+      digitalWrite(LED_RED_PIN, !digitalRead(LED_RED_PIN));
+      delay(250);
+    }
+  }
+  dfp.volume(VOLUME);
+  logMessage("[DFP] Volume atual: " + String(dfp.readVolume()));
+
+  spiSD.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+  if (!SD.begin(SD_CS_PIN, spiSD)) {
+    logMessage("[SD] Falha ao inicializar");
+    while (true) {
+      digitalWrite(LED_RED_PIN, !digitalRead(LED_RED_PIN));
+      delay(250);
+    }
+  }
+  logMessage("[SD] Cartao inicializado");
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    logMessage("[OLED] Falha ao inicializar");
+    while (true) {
+      digitalWrite(LED_RED_PIN, !digitalRead(LED_RED_PIN));
+      delay(250);
+    }
+  }
+  display.setRotation(2);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -579,169 +614,69 @@ void setup() {
   display.setCursor(0, 10);
   display.println("Inicializando...");
   display.display();
-  logMessage("[OLED] Adafruit_SSD1306 inicializado.");
 
-  // Inicializar MPU6050
-  byte status = mpu.begin();
-  if (status == 0) {
-    logMessage("[MPU] MPU6050 inicializado com sucesso!");
-    mpuInitialized = true;
-  } else {
-    logMessage("[MPU] Erro ao inicializar MPU6050. Status: " + String(status));
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Erro MPU6050");
-    display.display();
-    while (1) {
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(500);
-      digitalWrite(LED_RED_PIN, LOW);
-      delay(500);
-    }
-  }
-
-  // Inicializar DFPlayer
-  DFSerial.begin(DF_BAUD, SERIAL_8N1, DF_RX_PIN, DF_TX_PIN);
-  logMessage("[DFP] Inicializando...");
-  int retries = 5; // Aumentado para 5 tentativas
-  bool dfpInitialized = false;
-  while (retries > 0 && !dfpInitialized) {
-    if (dfp.begin(DFSerial, true, true)) {
-      logMessage("[DFP] Init OK");
-      dfpInitialized = true;
-    } else {
-      logMessage("[DFP] Init falhou. Tentativa restante: " + String(retries));
-      retries--;
-      delay(2000); // Aumentado delay para 2s
-    }
-  }
-  if (!dfpInitialized) {
-    logMessage("[DFP] Init falhou apos tentativas. Verifique fiacao, 5V, cartao SD.");
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Erro DFPlayer");
-    display.display();
-    while (1) {
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(500);
-      digitalWrite(LED_RED_PIN, LOW);
-      delay(500);
-    }
-  }
-  dfp.volume(VOLUME);
-  int currentVolume = dfp.readVolume();
-  logMessage("[DFP] Volume configurado para: " + String(currentVolume));
-  dfp.EQ(DFPLAYER_EQ_NORMAL);
-
-  int count = dfp.readFileCountsInFolder(0x02); // Lê o número de arquivos na pasta /mp3
-  logMessage("[DFP] Arquivos em /mp3 (reportados): " + String(count));
-  if (count != LAST_IDX) {
-    logMessage("[DFP] Alerta: Numero de arquivos reportados (" + String(count) + ") nao corresponde ao esperado (" + String(LAST_IDX) + "). Verifique o cartao SD (formato FAT32, apenas arquivos .mp3 de 0001 a 0010).");
-    digitalWrite(LED_RED_PIN, HIGH);
-    delay(LED_ON_MS);
-    digitalWrite(LED_RED_PIN, LOW);
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Erro SD Count");
-    display.display();
-  }
-
-  // Inicializar EEPROM
-  if (!EEPROM.begin(512)) {
-    logMessage("[EEPROM] Erro ao inicializar EEPROM!");
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("Erro EEPROM");
-    display.display();
-    while (1) {
-      digitalWrite(LED_RED_PIN, HIGH);
-      delay(500);
-      digitalWrite(LED_RED_PIN, LOW);
-      delay(500);
-    }
-  }
-  logMessage("[EEPROM] Inicializada com sucesso (512 bytes).");
-
-  // Inicializar BLE
   BLEDevice::init("LuvaTradutora");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   BLEService *pService = pServer->createService(SERVICE_UUID);
   pCharacteristic = pService->createCharacteristic(
-                     CHARACTERISTIC_UUID,
-                     BLECharacteristic::PROPERTY_READ |
-                     BLECharacteristic::PROPERTY_WRITE |
-                     BLECharacteristic::PROPERTY_NOTIFY
-                   );
+      CHARACTERISTIC_UUID,
+      BLECharacteristic::PROPERTY_READ |
+          BLECharacteristic::PROPERTY_WRITE |
+          BLECharacteristic::PROPERTY_NOTIFY);
   pCharacteristic->addDescriptor(new BLE2902());
   pService->start();
   BLEDevice::startAdvertising();
   logMessage("[BLE] Servidor iniciado");
 
-  // Exibir todas as palavras no OLED com rolagem
-  for (int offset = 0; offset < NUM_WORDS; offset += 3) { // Ajustado para 3 palavras por tela
+  for (int offset = 0; offset < NUM_WORDS; offset += 3) {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
     display.println("Palavras:");
     int y = 10;
-    for (int i = offset; i < offset + 3 && i < NUM_WORDS; i++) {
+    for (int i = offset; i < offset + 3 && i < NUM_WORDS; ++i) {
       display.setCursor(0, y);
       display.println(words[i]);
       y += 10;
     }
     display.display();
-    delay(2000); // Exibe por 2 segundos por página
+    delay(2000);
   }
 
-  // Piscar LEDs
-  for (int i = 0; i < 3; i++) {
+  for (int i = 0; i < 3; ++i) {
     digitalWrite(LED_GREEN_PIN, HIGH);
     digitalWrite(LED_RED_PIN, HIGH);
-    delay(200);
+    delay(150);
     digitalWrite(LED_GREEN_PIN, LOW);
     digitalWrite(LED_RED_PIN, LOW);
-    delay(200);
+    delay(150);
   }
 
-  // Verificar estado inicial do switch e tocar áudio de teste
   lastModeState = digitalRead(MODE_SWITCH_PIN) == HIGH;
   captureMode = lastModeState;
   if (captureMode) {
-    logMessage("[Setup] Modo de calibracao ativado. Pressione o botao de captura para iniciar.");
+    logMessage("[Setup] Modo calibracao ativo. Pressione o botao.");
     display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("Modo Calibracao");
+    display.println("Modo calibracao");
     display.setCursor(0, 10);
     display.println("Pressione botao");
     display.display();
   } else {
-    logMessage("[Setup] Modo de traducao ativado. Pressione o botao de captura para reconhecer gestos.");
+    logMessage("[Setup] Modo traducao ativo. Pressione o botao para reconhecer gestos.");
     display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
-    display.println("Modo Traducao");
+    display.println("Modo traducao");
     display.setCursor(0, 10);
     display.println("Pressione botao");
     display.display();
-    logMessage("[DFP] Testando reproducao de /mp3/0001.mp3...");
-    playIndex(FIRST_IDX); // Toca áudio de teste na inicialização
+    playIndex(FIRST_IDX);
   }
 }
 
-// ==== LOOP ====
+// ==== LOOP PRINCIPAL ====
 void loop() {
   if (dfp.available()) {
     uint8_t type = dfp.readType();
@@ -753,71 +688,59 @@ void loop() {
   if (currentModeState != lastModeState) {
     captureMode = currentModeState;
     if (captureMode) {
-      captureCount = 0;
-      mpuCalibrated = false;
-      for (int i = 0; i < NUM_WORDS; i++) {
-        capturesPerWord[i] = 0;
-        wordSampleCount[i] = 0;
-        for (int j = 0; j < NUM_SENSORS; j++) {
-          wordAccum[i][j] = 0.0f;
-        }
-      }
-      logMessage("[Mode] Modo de calibracao ativado. Pressione o botao de captura para iniciar.");
+      logMessage("[Mode] Entrou em modo calibracao");
       display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
-      display.println("Modo Calibracao");
+      display.println("Modo calibracao");
       display.setCursor(0, 10);
       display.println("Pressione botao");
       display.display();
+      resetCalibrationState();
     } else {
-      logMessage("[Mode] Modo de traducao ativado. Pressione o botao de captura para reconhecer gestos.");
+      logMessage("[Mode] Entrou em modo traducao");
       display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
-      display.println("Modo Traducao");
+      display.println("Modo traducao");
       display.setCursor(0, 10);
       display.println("Pressione botao");
       display.display();
-      logMessage("[DFP] Testando reproducao de /mp3/0001.mp3...");
-      playIndex(FIRST_IDX); // Toca áudio de teste ao mudar para modo tradução
+      waitingNext = true;
+      playIndex(FIRST_IDX);
     }
     lastModeState = currentModeState;
+    delay(250);
   }
 
   if (digitalRead(BUTTON_PIN) == LOW) {
+    delay(30); // debounce inicial
+    while (digitalRead(BUTTON_PIN) == LOW) {
+      delay(10);
+    }
+    delay(30); // debounce final
+
     if (captureMode && !mpuCalibrated) {
-      logMessage("[MPU] Calibrando offsets... Mantenha a luva estatica.");
-      mpu.calcOffsets(true, true); // Calibra giroscópio e acelerômetro
+      logMessage("[MPU] Calibrando offsets. Mantenha a luva estatica...");
+      mpu.calcOffsets(true, true);
       logMessage("[MPU] Calibracao concluida.");
       mpuCalibrated = true;
       digitalWrite(LED_GREEN_PIN, HIGH);
-      delay(500);
+      delay(400);
       digitalWrite(LED_GREEN_PIN, LOW);
       display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
       display.setCursor(0, 0);
-      display.println("Calibrado");
+      display.println("MPU calibrado");
       display.display();
       delay(1000);
       display.clearDisplay();
       display.setCursor(0, 0);
-      display.println("Modo Calibracao");
+      display.println("Modo calibracao");
       display.setCursor(0, 10);
       display.println("Pressione botao");
       display.display();
-      while (digitalRead(BUTTON_PIN) == LOW);
-      delay(50);
-      return;
     } else if (captureMode) {
       captureMovement();
     } else {
       readAndRecognize();
     }
-    while (digitalRead(BUTTON_PIN) == LOW);
-    delay(50);
   }
 }
