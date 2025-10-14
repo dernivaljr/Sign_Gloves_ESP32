@@ -29,3 +29,8 @@ O firmware `src/main.cpp` executa:
 - Leitura contínua das entradas analógicas configuradas para os sensores flex
 
 Utilize o monitor serial para acompanhar leituras e validar a fiação da luva.
+
+## Como usar este repositório gerado pelo assistente
+- **Nenhum arquivo é enviado automaticamente para o seu GitHub**: as alterações ficam somente neste workspace até que você faça o download ou copie o conteúdo manualmente.
+- **Integração com o VS Code**: para testar, extraia/baixe este projeto e abra a pasta no VS Code com a extensão PlatformIO instalada. A configuração `platformio.ini` já está ajustada para o ESP32 DevKit V1.
+- **Sincronização com seu repositório**: caso deseje colocar estes arquivos no seu GitHub, faça o commit/push pelo seu ambiente local ou substitua os arquivos no seu repositório conforme necessário.
