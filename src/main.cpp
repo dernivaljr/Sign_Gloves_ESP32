@@ -6,8 +6,9 @@
 // automática do objeto global `Serial`. Declaramos manualmente aqui para
 // garantir que os esboços que usam apenas PlatformIO/Arduino encontrem o
 // símbolo durante a compilação, independentemente do valor de
-// CONFIG_DISABLE_HAL_LOCKS.
-extern HardwareSerial Serial;
+// CONFIG_DISABLE_HAL_LOCKS. Fornecemos uma definição fraca que instancia
+// o objeto na UART0 somente quando o core não fizer isso automaticamente.
+HardwareSerial Serial(0) __attribute__((weak));
 
 // === CONFIGURAÇÕES ===
 // Ajuste a lista abaixo com os pinos ADC usados pelos sensores flex.
