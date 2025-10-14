@@ -6,6 +6,7 @@
 #include <DFRobotDFPlayerMini.h>
 #include <SPI.h>
 #include <SD.h>
+#include <HardwareSerial.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 32
