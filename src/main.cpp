@@ -6,6 +6,7 @@
 #include <Adafruit_SSD1306.h>
 #include <HardwareSerial.h>
 #include <DFRobotDFPlayerMini.h>
+#include "driver/adc.h" // para analogSetAttenuation (ESP32)
 
 // ================== PINAGEM (ESP32 DevKit V1) ==================
 #define I2C_SDA_PIN   21
@@ -20,7 +21,7 @@ const uint8_t OLED_ADDR = 0x3C;
 #define LED_RED_PIN    5    // LED vermelho = GPIO5
 
 #define BUTTON_CAPTURE 25   // inicia UMA captura (clique)
-#define BUTTON_MODE    26   // switch: HIGH=um modo, LOW=outro
+#define BUTTON_MODE    26   // switch: HIGH=CAPTURA, LOW=REPRODUCAO
 
 #define DF_RX_PIN      16   // ESP32 RX1  <= TX DFPlayer
 #define DF_TX_PIN      17   // ESP32 TX1  => RX DFPlayer
@@ -47,7 +48,6 @@ static const int SAMPLE_DELAY = CAPTURE_MS / SAMPLES; // ~20 ms (≈50 Hz)
 static const int FEATS        = 11;      // 5 flex + 3 gyro + 3 accel
 
 // ========= ORDEM das PALAVRAS / TRILHAS (1..10) =========
-// 1..10: ola, por favor, obrigado, bom dia, é, meu, nome, boa tarde, ajuda, boa noite
 static const int NUM_WORDS = 10;
 String words[NUM_WORDS] = {
   "ola",        // 1
@@ -81,6 +81,16 @@ uint8_t currentWord = 0; // 0..9
 uint8_t currentRep  = 1; // 1..3
 
 uint32_t lastBlink=0; bool ledState=false;
+
+// ====== pesos por feature (balancear escalas) ======
+static const float FEAT_W[FEATS] =
+  {1,1,1,1,1,   0.30f,0.30f,0.30f,   0.50f,0.50f,0.50f};
+
+// ====== limiar de rejeição (ajuste conforme seus logs) ======
+static const float REJECT_THR = 12.0f;
+
+// ====== offsets do MPU (baseline) ======
+float g_off[3]={0}, a_off[3]={0};
 
 // ================== UTILS ==================
 static inline void blinkAlive() {
@@ -139,6 +149,11 @@ bool mpuInit() {
   if (!i2cWrite(MPU_ADDR,0x6B,0x00)) return false; // wake
   if (!i2cWrite(MPU_ADDR,0x1C,0x08)) return false; // accel ±4g
   if (!i2cWrite(MPU_ADDR,0x1B,0x08)) return false; // gyro ±500 dps
+
+  // Filtro digital: DLPF_CFG=4 (~20 Hz)
+  i2cWrite(MPU_ADDR, 0x1A, 0x04);
+  // Sample Rate = GyroRate/(1+SMPLRT_DIV); com DLPF ativo Gyro=1kHz -> 1k/(1+9)=100 Hz
+  i2cWrite(MPU_ADDR, 0x19, 0x09);
   return true;
 }
 bool mpuRead(float& gx,float& gy,float& gz,float& ax,float& ay,float& az){
@@ -152,6 +167,10 @@ bool mpuRead(float& gx,float& gy,float& gz,float& ax,float& ay,float& az){
   gx= toI16(raw[8],raw[9])   / gS;
   gy= toI16(raw[10],raw[11]) / gS;
   gz= toI16(raw[12],raw[13]) / gS;
+
+  // subtrai offsets (baseline)
+  gx -= g_off[0]; gy -= g_off[1]; gz -= g_off[2];
+  ax -= a_off[0]; ay -= a_off[1]; az -= a_off[2];
   return true;
 }
 
@@ -176,7 +195,17 @@ bool initDFP(){
 }
 
 // ================== FEATURES (11) ==================
-static inline float readFlex(uint8_t pin){ return analogRead(pin)/4095.0f; }
+// oversampling + EMA para reduzir ruído
+static inline float readFlex(uint8_t pin){
+  uint32_t acc = 0;
+  for (int i=0;i<8;i++) acc += analogRead(pin);
+  float avg = (float)acc / 8.0f;          // 0..4095
+  static float ema[40] = {0};             // um slot por possível pino
+  float x = avg / 4095.0f;                // 0..1
+  const float alpha = 0.20f;              // EMA leve
+  ema[pin] = (1-alpha)*ema[pin] + alpha*x;
+  return ema[pin];
+}
 
 void captureFeatures(float feat[FEATS]) {
   // acumular somas
@@ -262,12 +291,34 @@ bool loadFeaturesCSV(const String& name, int rep, float feat[FEATS]){
 }
 
 float euclidDist(const float a[FEATS], const float b[FEATS]){
-  double s=0; for(int i=0;i<FEATS;i++){ double d=a[i]-b[i]; s+=d*d; } return sqrt(s);
+  double s=0;
+  for(int i=0;i<FEATS;i++){
+    double d=(a[i]-b[i])*FEAT_W[i]; // ponderado
+    s+=d*d;
+  }
+  return sqrt(s);
+}
+
+// ====== pré-checagem de imobilidade (gyro_norm < limiar por 0.3s) ======
+void waitStableHand(float gyro_lpf = 5.0f){
+  Serial.println("[PREP] Aguardando mao parada (gyro_norm < 5 dps por 0.3s)...");
+  uint32_t t0=millis(), ok_ms=0;
+  while (millis()-t0 < 1500) { // limita a 1.5s
+    float gx,gy,gz, ax,ay,az;
+    if (!mpuRead(gx,gy,gz, ax,ay,az)) break;
+    float norm = sqrtf(gx*gx+gy*gy+gz*gz);
+    if (norm < gyro_lpf) ok_ms += 30; else ok_ms = 0;
+    if (ok_ms >= 300) break; // 0.3s parado
+    delay(30);
+  }
 }
 
 // ================== AÇÕES ==================
 void doCaptureOne(uint8_t gestureIdx, uint8_t repIdx){
   String gName = words[gestureIdx];
+
+  // Aguarda mao parada antes de iniciar a janela
+  waitStableHand();
 
   Serial.printf("[CAPTURA] Palavra \"%s\"  captura %u/%u: iniciando agora por 2s...\n",
                 gName.c_str(), repIdx, REPS_PER_WORD);
@@ -301,12 +352,15 @@ void doCaptureOne(uint8_t gestureIdx, uint8_t repIdx){
 }
 
 void doPlayRecognize(){
+  // Aguarda mao parada antes de iniciar a janela
+  waitStableHand();
+
   // captura atual
   Serial.println("[PLAY] Capturando janela de 2s para reconhecimento (início imediato)...");
   oledMsg("Reproducao","Capturando 2s...");
   float cur[FEATS]; captureFeatures(cur);
 
-  // --- NOVO: usa CENTRÓIDE (média das réplicas) por palavra ---
+  // --- CENTRÓIDE (média das réplicas) por palavra + rejeição ---
   int bestWord=-1; float bestD=1e9;
 
   for (int w=0; w<NUM_WORDS; w++){
@@ -347,6 +401,13 @@ void doPlayRecognize(){
     return;
   }
 
+  // Rejeição (evita falso-positivos)
+  if (bestD > REJECT_THR) {
+    oledMsg("Nao reconhecido", "Tente novamente");
+    Serial.printf("[PLAY] Rejeitado: dist=%.6f > %.2f\n", bestD, REJECT_THR);
+    return;
+  }
+
   Serial.printf("[PLAY] Reconhecido: \"%s\"  dist(centroid)=%.6f -> tocando faixa %d.\n",
                 words[bestWord].c_str(), bestD, bestWord+1);
 
@@ -365,6 +426,10 @@ void setup(){
   pinMode(BUTTON_CAPTURE, INPUT_PULLUP);
   pinMode(BUTTON_MODE,    INPUT_PULLUP);
 
+  // ADC estável para flex
+  analogSetWidth(12);
+  analogSetAttenuation(ADC_11db);
+
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
 
   oledOK = initOLED();
@@ -372,11 +437,29 @@ void setup(){
   dfOK   = initDFP();
   mpuOK  = mpuInit();
 
-  Serial.println("\n=== STATUS INICIAL ===");
+  // Baseline do MPU (1s em neutro)
+  if (mpuOK) {
+    Serial.println("[CAL] Medindo baseline (1s)...");
+    double gs[3]={0}, as[3]={0};
+    const int N=100;
+    for(int i=0;i<N;i++){
+      float gx,gy,gz, ax,ay,az;
+      mpuRead(gx,gy,gz, ax,ay,az); // já aplica DLPF; offsets ainda zero aqui
+      // NÃO subtrair offsets agora — estamos medindo-os
+      gs[0]+=gx; gs[1]+=gy; gs[2]+=gz;
+      as[0]+=ax; as[1]+=ay; as[2]+=az;
+      delay(10);
+    }
+    for(int k=0;k<3;k++){ g_off[k]=gs[k]/N; a_off[k]=as[k]/N; }
+    Serial.printf("[CAL] GyroOff=(%.3f,%.3f,%.3f) AccOff=(%.3f,%.3f,%.3f)\n",
+      g_off[0],g_off[1],g_off[2], a_off[0],a_off[1],a_off[2]);
+  }
+
+  Serial.println("\n=== STATUS INICAL ===");
   Serial.printf("OLED=%s SD=%s DF=%s MPU=%s\n",
     oledOK?"OK":"ERRO", sdOK?"OK":"ERRO", dfOK?"OK":"ERRO", mpuOK?"OK":"ERRO");
   Serial.println("Switch MODO (GPIO26): HIGH=CAPTURA, LOW=REPRODUCAO.");
-  Serial.println("Botao CAPTURE (GPIO25): clique único inicia 2s de captação.");
+  Serial.println("Botao CAPTURE (GPIO25): clique unico inicia 2s de captacao.");
 
   oledMsg("Pronto", "HIGH:CAPT  LOW:PLAY");
 }
