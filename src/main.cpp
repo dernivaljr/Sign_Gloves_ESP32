@@ -6,7 +6,7 @@
 #include <Adafruit_SSD1306.h>
 #include <HardwareSerial.h>
 #include <DFRobotDFPlayerMini.h>
-#include "driver/adc.h" // para analogSetAttenuation (ESP32)
+#include "driver/adc.h" // analogSetAttenuation (ESP32)
 
 // ================== PINAGEM (ESP32 DevKit V1) ==================
 #define I2C_SDA_PIN   21
@@ -86,19 +86,26 @@ uint32_t lastBlink=0; bool ledState=false;
 static const float FEAT_W[FEATS] =
   {1,1,1,1,1,   0.30f,0.30f,0.30f,   0.50f,0.50f,0.50f};
 
-// ====== limiar de rejeição (ajuste conforme seus logs) ======
-static const float REJECT_THR = 12.0f;
+// ====== rejeição (tuning) ======
+static const float REJECT_THR_BASE = 6.0f;  // limiar absoluto (ajustado para sua escala atual)
+static const float K_RADIUS        = 1.6f;  // limite por raio: d_best <= K * radius_best
+static const float MARGIN_RATIO    = 0.20f; // exige d2/d1 >= 1.20 (20%) para aceitar
+static const float Z_MARGIN_MIN    = 0.30f; // exige (z2 - z1) >= 0.30
+static const float Z_MIN_RADIUS    = 0.80f; // evita raio muito pequeno -> z infinito
 
 // ====== offsets do MPU (baseline) ======
 float g_off[3]={0}, a_off[3]={0};
 
-// ================== UTILS ==================
+// ================== LED helpers ==================
+void ledGreenPulse(uint16_t on_ms=180){ digitalWrite(LED_GREEN_PIN, HIGH); delay(on_ms); digitalWrite(LED_GREEN_PIN, LOW); }
+void ledRedPulse(uint16_t on_ms=250){ digitalWrite(LED_RED_PIN, HIGH); delay(on_ms); digitalWrite(LED_RED_PIN, LOW); }
+
 static inline void blinkAlive() {
   if (millis()-lastBlink >= 500) {
     lastBlink = millis();
     ledState = !ledState;
+    // “batimento” verde — vermelho só para erro/rejeição
     digitalWrite(LED_GREEN_PIN, ledState);
-    digitalWrite(LED_RED_PIN,   !ledState);
   }
 }
 
@@ -149,10 +156,9 @@ bool mpuInit() {
   if (!i2cWrite(MPU_ADDR,0x6B,0x00)) return false; // wake
   if (!i2cWrite(MPU_ADDR,0x1C,0x08)) return false; // accel ±4g
   if (!i2cWrite(MPU_ADDR,0x1B,0x08)) return false; // gyro ±500 dps
-
   // Filtro digital: DLPF_CFG=4 (~20 Hz)
   i2cWrite(MPU_ADDR, 0x1A, 0x04);
-  // Sample Rate = GyroRate/(1+SMPLRT_DIV); com DLPF ativo Gyro=1kHz -> 1k/(1+9)=100 Hz
+  // Sample Rate = 1kHz/(1+9)=100 Hz (com DLPF ativo)
   i2cWrite(MPU_ADDR, 0x19, 0x09);
   return true;
 }
@@ -167,7 +173,6 @@ bool mpuRead(float& gx,float& gy,float& gz,float& ax,float& ay,float& az){
   gx= toI16(raw[8],raw[9])   / gS;
   gy= toI16(raw[10],raw[11]) / gS;
   gz= toI16(raw[12],raw[13]) / gS;
-
   // subtrai offsets (baseline)
   gx -= g_off[0]; gy -= g_off[1]; gz -= g_off[2];
   ax -= a_off[0]; ay -= a_off[1]; az -= a_off[2];
@@ -208,7 +213,6 @@ static inline float readFlex(uint8_t pin){
 }
 
 void captureFeatures(float feat[FEATS]) {
-  // acumular somas
   double sum[FEATS]={0};
   uint32_t t0 = millis();
   for (int i=0;i<SAMPLES;i++){
@@ -317,6 +321,8 @@ void waitStableHand(float gyro_lpf = 5.0f){
 void doCaptureOne(uint8_t gestureIdx, uint8_t repIdx){
   String gName = words[gestureIdx];
 
+  Serial.printf("[CAPTURA] Proxima palavra: \"%s\"  (rep %u/%u)\n", gName.c_str(), repIdx, REPS_PER_WORD);
+
   // Aguarda mao parada antes de iniciar a janela
   waitStableHand();
 
@@ -335,9 +341,11 @@ void doCaptureOne(uint8_t gestureIdx, uint8_t repIdx){
     Serial.printf("[CAPTURA] Terminada captura %u da palavra \"%s\". Arquivo: %s\n",
                   repIdx, gName.c_str(), gestureFile(gName,repIdx).c_str());
     oledMsg("Salvo:", gestureFile(gName,repIdx));
+    ledGreenPulse(); // sucesso de captura
   } else {
     Serial.printf("[CAPTURA] ERRO ao salvar captura %u da palavra \"%s\"!\n", repIdx, gName.c_str());
     oledMsg("ERRO salvar", gName);
+    ledRedPulse();
   }
 
   if (repIdx < REPS_PER_WORD) {
@@ -348,7 +356,7 @@ void doCaptureOne(uint8_t gestureIdx, uint8_t repIdx){
                   REPS_PER_WORD, gName.c_str());
   }
 
-  delay(300);
+  delay(200);
 }
 
 void doPlayRecognize(){
@@ -360,23 +368,26 @@ void doPlayRecognize(){
   oledMsg("Reproducao","Capturando 2s...");
   float cur[FEATS]; captureFeatures(cur);
 
-  // --- CENTRÓIDE (média das réplicas) por palavra + rejeição ---
-  int bestWord=-1; float bestD=1e9;
+  // --- CENTRÓIDE + raio, decisão por z-score + margens relativas ---
+  int bestWord=-1;
+  float bestD=1e9, secondD=1e9;
+  float bestZ=1e9, secondZ=1e9;
+  float bestRadius=-1.0f;
 
   for (int w=0; w<NUM_WORDS; w++){
     // carregar todas as réplicas disponíveis
+    float refs[REPS_PER_WORD][FEATS];
+    bool has[REPS_PER_WORD]={false,false,false};
     float sum[FEATS]={0};
     int used=0;
 
     Serial.printf("[PLAY] --- %s ---\n", words[w].c_str());
     for (int r=1; r<=REPS_PER_WORD; r++){
-      float ref[FEATS];
-      if (!loadFeaturesCSV(words[w], r, ref)) continue; // pode não existir
-      // debug por réplica
-      float drep = euclidDist(cur, ref);
+      if (!loadFeaturesCSV(words[w], r, refs[r-1])) continue;
+      has[r-1]=true;
+      float drep = euclidDist(cur, refs[r-1]);
       Serial.printf("[PLAY]   rep %d  dist=%.6f\n", r, drep);
-
-      for (int k=0;k<FEATS;k++) sum[k]+=ref[k];
+      for (int k=0;k<FEATS;k++) sum[k]+=refs[r-1][k];
       used++;
     }
 
@@ -389,32 +400,66 @@ void doPlayRecognize(){
     float centroid[FEATS];
     for (int k=0;k<FEATS;k++) centroid[k] = sum[k] / (float)used;
 
-    float dcent = euclidDist(cur, centroid);
-    Serial.printf("[PLAY]   centroid(%d reps) dist=%.6f  [usado para decisao]\n", used, dcent);
+    // raio (média das distâncias das réplicas ao centróide)
+    double rsum=0; int rc=0;
+    for (int r=0;r<REPS_PER_WORD;r++){
+      if (!has[r]) continue;
+      rsum += euclidDist(refs[r], centroid);
+      rc++;
+    }
+    float radius = (rc>0) ? (float)(rsum/rc) : -1.0f;
 
-    if (dcent < bestD){ bestD=dcent; bestWord=w; }
+    float dcent = euclidDist(cur, centroid);
+    float denom = max(radius, Z_MIN_RADIUS);
+    float z = dcent / denom;
+
+    Serial.printf("[PLAY]   centroid(%d reps) dist=%.6f  radius=%.6f  z=%.3f  limite=%.6f\n",
+                  used, dcent, radius, z, (radius>0? K_RADIUS*radius : REJECT_THR_BASE));
+
+    // ranking por z (normalizado por raio)
+    if (z < bestZ) {
+      secondZ = bestZ; secondD = bestD;
+      bestZ = z; bestD = dcent; bestWord = w; bestRadius = radius;
+    } else if (z < secondZ) {
+      secondZ = z; secondD = dcent;
+    }
   }
 
   if (bestWord<0){
     oledMsg("Sem base","Capture primeiro");
     Serial.println("[PLAY] Nenhuma base encontrada no SD. Faça as capturas no modo CAPTURA.");
+    ledRedPulse();
     return;
   }
 
-  // Rejeição (evita falso-positivos)
-  if (bestD > REJECT_THR) {
+  // Regras de aceitação
+  float limit = (bestRadius > 0) ? (K_RADIUS * bestRadius) : REJECT_THR_BASE;
+  float ratio = (bestD > 0 && secondD<1e8) ? (secondD / bestD) : 999.0f;
+  float zmargin = (secondZ<1e8) ? (secondZ - bestZ) : 999.0f;
+
+  bool passRadius = (bestD <= limit) || (bestD <= REJECT_THR_BASE);
+  bool passMargin = (ratio >= 1.0f + MARGIN_RATIO) || (zmargin >= Z_MARGIN_MIN);
+
+  Serial.printf("[DECISION] word=\"%s\"  d1=%.6f d2=%.6f ratio=%.3f  z1=%.3f z2=%.3f zmargin=%.3f  radius=%.6f limit=%.6f  passRadius=%s passMargin=%s\n",
+                words[bestWord].c_str(), bestD, secondD, ratio, bestZ, secondZ, zmargin, bestRadius, limit,
+                passRadius?"OK":"NO", passMargin?"OK":"NO");
+
+  if (!(passRadius && passMargin)) {
+    if (!passRadius) Serial.printf("[PLAY] Rejeitado por raio/limite: d=%.6f > limite=%.6f (ou > %.6f)\n", bestD, limit, REJECT_THR_BASE);
+    if (!passMargin) Serial.printf("[PLAY] Rejeitado por margem: ratio=%.3f (min=%.3f) ou zmargin=%.3f (min=%.3f)\n",
+                                   ratio, 1.0f+MARGIN_RATIO, zmargin, Z_MARGIN_MIN);
     oledMsg("Nao reconhecido", "Tente novamente");
-    Serial.printf("[PLAY] Rejeitado: dist=%.6f > %.2f\n", bestD, REJECT_THR);
+    ledRedPulse();
     return;
   }
 
-  Serial.printf("[PLAY] Reconhecido: \"%s\"  dist(centroid)=%.6f -> tocando faixa %d.\n",
-                words[bestWord].c_str(), bestD, bestWord+1);
+  Serial.printf("[PLAY] Reconhecido: \"%s\"  d=%.6f  z=%.3f  (limit=%.6f, ratio=%.3f, zmargin=%.3f) -> tocando faixa %d.\n",
+                words[bestWord].c_str(), bestD, bestZ, limit, ratio, zmargin, bestWord+1);
 
   oledMsg("Reconhecido", words[bestWord]);
-
+  ledGreenPulse(); // sucesso de reconhecimento
   if (dfOK){ dfPlayer.volume(30); dfPlayer.play(bestWord+1); }  // volume MÁXIMO
-  delay(600);
+  delay(400);
 }
 
 // ================== SETUP / LOOP ==================
@@ -423,6 +468,9 @@ void setup(){
 
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN,   OUTPUT);
+  digitalWrite(LED_GREEN_PIN, LOW);
+  digitalWrite(LED_RED_PIN, LOW);
+
   pinMode(BUTTON_CAPTURE, INPUT_PULLUP);
   pinMode(BUTTON_MODE,    INPUT_PULLUP);
 
@@ -437,17 +485,30 @@ void setup(){
   dfOK   = initDFP();
   mpuOK  = mpuInit();
 
+  if (!oledOK || !sdOK || !dfOK || !mpuOK){
+    Serial.printf("[ERRO] Inicializacao: OLED=%s SD=%s DF=%s MPU=%s\n",
+      oledOK?"OK":"ERRO", sdOK?"OK":"ERRO", dfOK?"OK":"ERRO", mpuOK?"OK":"ERRO");
+    oledMsg("ERRO INICIAL", "Verifique HW");
+    ledRedPulse(600);
+  }
+
   // Baseline do MPU (1s em neutro)
   if (mpuOK) {
     Serial.println("[CAL] Medindo baseline (1s)...");
     double gs[3]={0}, as[3]={0};
     const int N=100;
     for(int i=0;i<N;i++){
-      float gx,gy,gz, ax,ay,az;
-      mpuRead(gx,gy,gz, ax,ay,az); // já aplica DLPF; offsets ainda zero aqui
-      // NÃO subtrair offsets agora — estamos medindo-os
-      gs[0]+=gx; gs[1]+=gy; gs[2]+=gz;
-      as[0]+=ax; as[1]+=ay; as[2]+=az;
+      uint8_t raw[14];
+      i2cReadBlock(MPU_ADDR,0x3B,raw,sizeof(raw));
+      const float aS=8192.0f, gS=65.5f;
+      float _ax= toI16(raw[0],raw[1]) / aS * 9.80665f;
+      float _ay= toI16(raw[2],raw[3]) / aS * 9.80665f;
+      float _az= toI16(raw[4],raw[5]) / aS * 9.80665f;
+      float _gx= toI16(raw[8],raw[9])   / gS;
+      float _gy= toI16(raw[10],raw[11]) / gS;
+      float _gz= toI16(raw[12],raw[13]) / gS;
+      gs[0]+=_gx; gs[1]+=_gy; gs[2]+=_gz;
+      as[0]+=_ax; as[1]+=_ay; as[2]+=_az;
       delay(10);
     }
     for(int k=0;k<3;k++){ g_off[k]=gs[k]/N; a_off[k]=as[k]/N; }
@@ -455,7 +516,7 @@ void setup(){
       g_off[0],g_off[1],g_off[2], a_off[0],a_off[1],a_off[2]);
   }
 
-  Serial.println("\n=== STATUS INICAL ===");
+  Serial.println("\n=== STATUS INICIAL ===");
   Serial.printf("OLED=%s SD=%s DF=%s MPU=%s\n",
     oledOK?"OK":"ERRO", sdOK?"OK":"ERRO", dfOK?"OK":"ERRO", mpuOK?"OK":"ERRO");
   Serial.println("Switch MODO (GPIO26): HIGH=CAPTURA, LOW=REPRODUCAO.");
@@ -471,6 +532,15 @@ void loop(){
   AppMode appMode = (digitalRead(BUTTON_MODE)==HIGH) ? MODE_WHEN_HIGH
                                                      : (MODE_WHEN_HIGH==MODE_CAPTURE ? MODE_PLAY : MODE_CAPTURE);
 
+  // Log quando o modo alterar
+  static AppMode lastMode = MODE_PLAY;
+  if (appMode != lastMode){
+    Serial.printf("[MODO] Alterado: %s -> %s\n",
+      lastMode==MODE_CAPTURE ? "CAPTURA" : "REPRODUCAO",
+      appMode==MODE_CAPTURE ? "CAPTURA" : "REPRODUCAO");
+    lastMode = appMode;
+  }
+
   // Mostra no OLED o estado atual (sem flood)
   static uint32_t lastOLED=0;
   if (oledOK && millis()-lastOLED>500) {
@@ -482,7 +552,7 @@ void loop(){
 
     if (appMode==MODE_CAPTURE) {
       display.setCursor(0,12);
-      display.print("Palavra: ");
+      display.print("Prox: ");
       display.println(words[currentWord]);
       display.setCursor(0,24);
       display.print("Captura: ");
@@ -508,14 +578,15 @@ void loop(){
     if (!oledOK || !sdOK || !mpuOK) {
       Serial.println("[ERRO] Subsistema faltando (OLED/SD/MPU).");
       oledMsg("ERRO","OLED/SD/MPU?");
+      ledRedPulse();
     } else {
       if (appMode==MODE_CAPTURE){
-        // Executa UMA captura para a palavra/rep atual (começa já)
+        Serial.printf("[CAPTURA] Proxima palavra: \"%s\"  (rep %u/%u)\n",
+                      words[currentWord].c_str(), currentRep, REPS_PER_WORD);
         Serial.printf("[CAPTURA] Palavra atual: \"%s\"  captura %u/%u\n",
                       words[currentWord].c_str(), currentRep, REPS_PER_WORD);
         doCaptureOne(currentWord, currentRep);
 
-        // Avança repetição; se concluiu 3, avança a palavra e reseta repetição
         if (currentRep < REPS_PER_WORD) {
           currentRep++;
         } else {
