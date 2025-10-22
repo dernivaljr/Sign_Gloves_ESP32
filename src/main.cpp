@@ -1,168 +1,127 @@
-// ======================= Sign Gloves ESP32 – Captura & Reprodução =======================
-// Placa: ESP32 DevKit V1  | Framework: Arduino (PlatformIO)
-// Periféricos: OLED 128x32 I2C (0x3C), DFPlayer Mini (Serial1), SD (SPI), MPU6050 (I2C),
-//              5 flex (ADC), botão de captura (GPIO25), switch de modo (GPIO26),
-//              LED verde (GPIO4), LED vermelho (GPIO5)
-//
-// Áudios em: /mp3/0001.mp3 .. /mp3/0010.mp3  (usar dfPlayer.playMp3Folder(idx))
-//
-// Modo:  GPIO26 HIGH = CAPTURA  |  GPIO26 LOW = REPRODUÇÃO
-// Botão: clique único inicia uma janela de 2s (CAPTURA: grava réplica; REPRODUÇÃO: reconhece e toca)
-// ========================================================================================
-
 #include <Arduino.h>
 #include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <DFRobotDFPlayerMini.h>
 #include <MPU6050_light.h>
-#include <algorithm>
+#include <DFRobotDFPlayerMini.h>
+#include <SPI.h>
+#include <SD.h>
 
-// -------------------- Pinos --------------------
-#define SCREEN_WIDTH   128
-#define SCREEN_HEIGHT  32
-#define OLED_RESET     -1
+// ======================= PINOS =======================
+#define OLED_SDA        21
+#define OLED_SCL        22
 
-// Flex (ADC)
-#define FLEX1_PIN 32
-#define FLEX2_PIN 33
-#define FLEX3_PIN 34
-#define FLEX4_PIN 35
-#define FLEX5_PIN 36  // VP (apenas entrada)
+#define DF_RX_PIN       16  // DFPlayer->ESP32 RX
+#define DF_TX_PIN       17  // ESP32->DFPlayer TX
 
-// I2C
-#define I2C_SDA_PIN 21
-#define I2C_SCL_PIN 22
+#define FLEX1_PIN       36
+#define FLEX2_PIN       39
+#define FLEX3_PIN       34
+#define FLEX4_PIN       35
+#define FLEX5_PIN       32
 
-// DFPlayer (Serial1)
-#define DF_RX_PIN 16   // DFPlayer TX -> ESP32 RX16
-#define DF_TX_PIN 17   // DFPlayer RX -> ESP32 TX17
+// SD em VSPI
+#define SD_CS_PIN       27
+#define SD_SCK_PIN      18
+#define SD_MISO_PIN     19
+#define SD_MOSI_PIN     23
 
-// SD (SPI)
-#define SD_CS_PIN   27
-#define SD_MISO_PIN 12
-#define SD_MOSI_PIN 13
-#define SD_SCK_PIN  14
+#define BUTTON_PIN      25  // Botão (clique único -> 2s de janela)
+#define MODE_SWITCH_PIN 26  // HIGH = CAPTURA, LOW = REPRODUCAO
 
-// Controles/LEDs
-#define SWITCH_PIN      26   // HIGH=CAPTURA, LOW=REPRODUCAO
-#define BUTTON_PIN      25   // clique único inicia 2s
 #define LED_GREEN_PIN   4
 #define LED_RED_PIN     5
 
-// -------------------- Objetos --------------------
+// ======================= OLED =======================
+#define SCREEN_WIDTH  128
+#define SCREEN_HEIGHT  32
+#define OLED_RESET     -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ======================= DFPLAYER =======================
 HardwareSerial dfSerial(1);
 DFRobotDFPlayerMini dfPlayer;
-SPIClass spiSD;
+
+// ======================= SD =======================
+SPIClass spiSD(VSPI);
+
+// ======================= MPU6050 =======================
 MPU6050 mpu(Wire);
+struct Baseline {
+  float gx=0, gy=0, gz=0;
+  float ax=0, ay=0, az=0;
+} base;
 
-// -------------------- Parâmetros de captura --------------------
-static const uint16_t FS_HZ = 100;          // ~100 Hz
-static const uint16_t CAPTURE_MS = 2000;    // 2 s
-static const uint16_t N_SAMPLES = FS_HZ * (CAPTURE_MS / 1000);
-static const uint8_t  N_FLEX = 5;
-static const uint8_t  N_GYRO = 3;
-static const uint8_t  N_ACCEL = 3;
-static const uint8_t  N_FEAT = N_FLEX + N_GYRO + N_ACCEL; // 11 features
-static const uint8_t  N_WORDS = 10;
-static const uint8_t  N_REPS = 3;
+// ======================= PROJETO =======================
+static const uint8_t NUM_WORDS = 10;
+static const uint8_t REPS_PER_WORD = 3;
+static const uint16_t SAMPLE_RATE_HZ = 50;     // 50 Hz
+static const uint16_t WINDOW_MS = 2000;        // 2 s
+static const uint16_t SAMPLES = (WINDOW_MS * SAMPLE_RATE_HZ) / 1000;
 
-// Pesos (aumenta importância de IMU)
-static const float W_FLEX = 1.0f;
-static const float W_GYRO = 1.6f;
-static const float W_ACC  = 1.3f;
-
-// Critérios
-static const float STILL_GYRO_DPS = 5.0f;     // mão parada < 5 dps
-static const uint16_t STILL_MS = 300;         // por 0.3 s
-static const float MIN_RATIO = 1.15f;         // margem baixa se d2/d1 < 1.15
-
-// Radius clamp (para z-score estável)
-static const float RADIUS_MIN = 2.0f;
-static const float RADIUS_MAX = 15.0f;
-
-// -------------------- Palavras / nomes de arquivo --------------------
-const char* WORDS[N_WORDS] = {
-  "ola", "por favor", "obrigado", "bom dia", "e",
-  "meu", "nome", "boa tarde", "ajuda", "boa noite"
+static const char* words[NUM_WORDS] = {
+  "ola","por favor","obrigado","bom dia","é","meu","nome","boa tarde","ajuda","boa noite"
 };
-
-// nomes “seguros” (sem acento/espços) p/ arquivos no SD
-const char* SAFE[N_WORDS] = {
-  "ola", "por_favor", "obrigado", "bom_dia", "e",
-  "meu", "nome", "boa_tarde", "ajuda", "boa_noite"
+// slugs ASCII para arquivos no SD
+static const char* slugs[NUM_WORDS] = {
+  "ola","por_favor","obrigado","bom_dia","e","meu","nome","boa_tarde","ajuda","boa_noite"
 };
+// faixas MP3 (1..10) — arquivos em /mp3/0001.mp3 ... /mp3/0010.mp3
+static const uint8_t trackOfWord[NUM_WORDS] = {1,2,3,4,5,6,7,8,9,10};
 
-// -------------------- Estado --------------------
+enum Mode {CAPTURE=0, PLAY=1};
+
+// ====== pesos (depois da normalização) ======
+float W_FLEX  = 1.2f;   // média dos 5 flex (0..1)
+float W_GYRO  = 0.25f;  // termo relativo 0..1
+float W_ACCEL = 0.25f;  // termo relativo 0..1
+
+// ====== “bases” para normalização relativa (evita penalizar Δ pequeno em gestos fortes) ======
+const float GYRO_BASE  = 50.0f;   // dps
+const float ACCEL_BASE = 1.20f;   // m/s²
+
+// buffers e estado (armazenamos cada réplica)
+float meanFlex[NUM_WORDS][REPS_PER_WORD][5]; // 5 flex
+float meanGyro[NUM_WORDS][REPS_PER_WORD];    // norma
+float meanAccel[NUM_WORDS][REPS_PER_WORD];   // norma
+
+uint8_t repDone[NUM_WORDS] = {0}; // quantas réplicas por palavra
+uint8_t currentWord = 0;
+
 bool oledOK=false, sdOK=false, dfOK=false, mpuOK=false;
 
-float gyroOff[3]  = {0,0,0};   // offset simples do gyro (calib rápida)
-float accOff[3]   = {0,0,0};   // offset média bruta accel (não remove gravidade)
-
-uint8_t wordIdx = 0;           // índice da palavra em captura
-uint8_t repIdx[N_WORDS] = {0}; // 0..3 (contador de capturas feitas por palavra)
-
-// Centroides e "radius" (intra-cluster) por palavra
-float centroid[N_WORDS][N_FEAT]; // média das 3 réplicas
-float radiusW[N_WORDS];          // média das distâncias das reps ao centróide (clamped)
-
-// Debounce
-uint32_t lastBtnMs = 0;
-
-// -------------------- Helpers de LED --------------------
-void ledOK()    { digitalWrite(LED_GREEN_PIN, HIGH); delay(120); digitalWrite(LED_GREEN_PIN, LOW); }
-void ledError() { digitalWrite(LED_RED_PIN,   HIGH); delay(250); digitalWrite(LED_RED_PIN,   LOW); }
-
-// -------------------- Utilidades --------------------
-void clearCentroids() {
-  memset(centroid, 0, sizeof(centroid));
-  memset(radiusW, 0, sizeof(radiusW));
-}
-
-float clampf(float x, float lo, float hi) {
-  if (x < lo) return lo;
-  if (x > hi) return hi;
-  return x;
-}
-
-float vecDist(const float *a, const float *b, uint8_t n) {
-  float s=0;
-  for (uint8_t i=0;i<n;i++) {
-    float d = a[i]-b[i];
-    s += d*d;
+// ======================= UTIL =======================
+void ledGreenBlink(uint8_t times=1, uint16_t on=80, uint16_t off=80) {
+  for (uint8_t i=0;i<times;i++){
+    digitalWrite(LED_GREEN_PIN, HIGH);
+    delay(on);
+    digitalWrite(LED_GREEN_PIN, LOW);
+    delay(off);
   }
-  return sqrtf(s);
 }
-
-float norm3(float x, float y, float z) {
-  return sqrtf(x*x + y*y + z*z);
-}
-
-bool waitStill(uint16_t msNeeded, float gyroThreshDps) {
-  uint32_t t0 = millis();
-  uint32_t okSince = 0;
-  Serial.println("[PREP] Aguardando mao parada (gyro_norm < 5 dps por 0.3s)...");
-  while (true) {
-    mpu.update();
-    float gx = mpu.getGyroX() - gyroOff[0];
-    float gy = mpu.getGyroY() - gyroOff[1];
-    float gz = mpu.getGyroZ() - gyroOff[2];
-    float gnorm = norm3(gx,gy,gz);
-    if (gnorm < gyroThreshDps) {
-      if (okSince==0) okSince = millis();
-      if (millis() - okSince >= msNeeded) return true;
-    } else {
-      okSince = 0;
-    }
-    if (millis() - t0 > 5000) return true; // timeout amigável
-    delay(5);
+void ledRedBlink(uint8_t times=1, uint16_t on=120, uint16_t off=120) {
+  for (uint8_t i=0;i<times;i++){
+    digitalWrite(LED_RED_PIN, HIGH);
+    delay(on);
+    digitalWrite(LED_RED_PIN, LOW);
+    delay(off);
   }
 }
 
-void drawSmall(const String& l1, const String& l2="") {
+bool buttonClicked() {
+  static uint8_t last = HIGH;
+  uint8_t now = digitalRead(BUTTON_PIN);
+  bool clicked = (last==HIGH && now==LOW);
+  last = now;
+  return clicked;
+}
+
+enum Mode readMode() {
+  return (digitalRead(MODE_SWITCH_PIN)==HIGH) ? CAPTURE : PLAY;
+}
+
+void oledMsg(const String& l1, const String& l2="") {
+  if (!oledOK) return;
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
@@ -172,384 +131,409 @@ void drawSmall(const String& l1, const String& l2="") {
   display.display();
 }
 
-// captura 2s -> média (11 features) com pesos aplicados
-bool captureMean(float outFeat[N_FEAT], bool logSummary) {
-  float acc[N_FEAT]={0};
+// ===== Espera mão parada com timeout + debug leve =====
+bool waitHandStill(uint16_t holdMs=300, float gyroThreshDps=5.0f, float accelThresh=1.5f, uint16_t maxWaitMs=2500) {
+  uint32_t tHoldStart = millis();
+  uint32_t tOverallStart = millis();
+  uint32_t lastPrint = 0;
 
-  uint32_t tStart = millis();
-  uint32_t tEnd = tStart + CAPTURE_MS;
-  uint16_t n=0;
-
-  while (millis() < tEnd) {
-    float f1 = analogRead(FLEX1_PIN)/4095.0f;
-    float f2 = analogRead(FLEX2_PIN)/4095.0f;
-    float f3 = analogRead(FLEX3_PIN)/4095.0f;
-    float f4 = analogRead(FLEX4_PIN)/4095.0f;
-    float f5 = analogRead(FLEX5_PIN)/4095.0f;
-
+  while (true) {
     mpu.update();
-    float gx = (mpu.getGyroX()-gyroOff[0]);
-    float gy = (mpu.getGyroY()-gyroOff[1]);
-    float gz = (mpu.getGyroZ()-gyroOff[2]);
 
-    float ax = (mpu.getAccX()-accOff[0])*9.80665f;
-    float ay = (mpu.getAccY()-accOff[1])*9.80665f;
-    float az = (mpu.getAccZ()-accOff[2])*9.80665f;
+    float gx = (mpu.getGyroX() - base.gx);
+    float gy = (mpu.getGyroY() - base.gy);
+    float gz = (mpu.getGyroZ() - base.gz);
+    float ax = (mpu.getAccX() - base.ax);
+    float ay = (mpu.getAccY() - base.ay);
+    float az = (mpu.getAccZ() - base.az);
 
-    acc[0]+=f1; acc[1]+=f2; acc[2]+=f3; acc[3]+=f4; acc[4]+=f5;
-    acc[5]+=gx; acc[6]+=gy; acc[7]+=gz;
-    acc[8]+=ax; acc[9]+=ay; acc[10]+=az;
+    float gnorm = sqrtf(gx*gx + gy*gy + gz*gz);
+    float anorm = sqrtf(ax*ax + ay*ay + az*az);
 
-    n++;
-    delay(1000/FS_HZ);
+    if (millis() - lastPrint > 250) {
+      Serial.printf("[PREP] gyro|=%.2f dps  accel|=%.2f m/s2\n", gnorm, anorm);
+      lastPrint = millis();
+    }
+
+    if (gnorm < gyroThreshDps && anorm < accelThresh) {
+      if (millis() - tHoldStart >= holdMs) return true;
+    } else {
+      tHoldStart = millis();
+    }
+
+    if (millis() - tOverallStart >= maxWaitMs) {
+      Serial.println("[PREP] Timeout de imobilidade — seguindo assim mesmo.");
+      return false;
+    }
+    delay(5);
   }
+}
 
-  if (n==0) return false;
-  for (uint8_t i=0;i<N_FEAT;i++) outFeat[i]=acc[i]/n;
-
-  // aplica pesos
-  for (uint8_t i=0;i<N_FLEX;i++) outFeat[i] *= W_FLEX;
-  for (uint8_t i=0;i<N_GYRO;i++) outFeat[5+i] *= W_GYRO;      // 5..7
-  for (uint8_t i=0;i<N_ACCEL;i++) outFeat[8+i] *= W_ACC;      // 8..10
-
-  if (logSummary) {
-    float gnorm = norm3(outFeat[5]/W_GYRO, outFeat[6]/W_GYRO, outFeat[7]/W_GYRO);
-    float anorm = norm3(outFeat[8]/W_ACC, outFeat[9]/W_ACC, outFeat[10]/W_ACC);
-    Serial.printf("[CAPTURA] mean flex=[%.3f,%.3f,%.3f,%.3f,%.3f]  gyro|=%.3f  accel|=%.3f\n",
-      outFeat[0]/W_FLEX, outFeat[1]/W_FLEX, outFeat[2]/W_FLEX, outFeat[3]/W_FLEX, outFeat[4]/W_FLEX,
-      gnorm, anorm);
+// ======================= SD HELPERS =======================
+bool ensureRefsFolder() {
+  if (!sdOK) return false;
+  if (!SD.exists("/refs")) {
+    if (!SD.mkdir("/refs")) {
+      Serial.println("[SD] Falha ao criar /refs");
+      return false;
+    }
   }
   return true;
 }
 
-bool saveCSV(const char* baseName, uint8_t rep, const float feat[N_FEAT]) {
+bool saveCSV(uint8_t w, uint8_t r,
+             const float flex[5], float gyroNorm, float accelNorm)
+{
   if (!sdOK) return false;
   char path[64];
-  snprintf(path, sizeof(path), "/%s_rep%u.csv", baseName, (unsigned)rep);
+  snprintf(path, sizeof(path), "/refs/%s_rep%u.csv", slugs[w], (unsigned)(r+1));
   File f = SD.open(path, FILE_WRITE);
-  if (!f) return false;
-  f.println("idx,feat");
-  for (uint8_t i=0;i<N_FEAT;i++) {
-    f.print(i); f.print(','); f.println(feat[i], 6);
+  if (!f) {
+    Serial.printf("[SD] Falha ao abrir %s\n", path);
+    return false;
   }
+  f.println("sensor,value");
+  for (int i=0;i<5;i++) f.printf("flex%d,%.6f\n", i+1, flex[i]);
+  f.printf("gyro_norm,%.6f\n",  gyroNorm);
+  f.printf("accel_norm,%.6f\n", accelNorm);
   f.close();
   Serial.printf("[CAPTURA] Salvo: %s\n", path);
   return true;
 }
 
-void recomputeCentroid(uint8_t w) {
-  float sum[N_FEAT]={0};
-  float reps[3][N_FEAT]={0};
-  uint8_t have=0;
+// ======================= CAPTURA DE JANELA =======================
+struct WindowMeans {
+  float flex[5];
+  float gyroNorm;
+  float accelNorm;
+};
 
-  for (uint8_t r=1;r<=N_REPS;r++) {
-    char path[64];
-    snprintf(path,sizeof(path),"/%s_rep%u.csv", SAFE[w], (unsigned)r);
-    File f = SD.open(path, FILE_READ);
-    if (!f) continue;
-    String header = f.readStringUntil('\n');
-    uint8_t k=0;
-    while (f.available() && k<N_FEAT) {
-      String line = f.readStringUntil('\n');
-      int comma = line.indexOf(',');
-      if (comma>0) {
-        float v = line.substring(comma+1).toFloat();
-        reps[r-1][k]=v;
-        sum[k]+=v;
-        k++;
-      }
-    }
-    f.close();
-    if (k==N_FEAT) have++;
+WindowMeans captureWindow(uint16_t ms=WINDOW_MS, uint16_t rateHz=SAMPLE_RATE_HZ) {
+  WindowMeans wm{};
+  const uint16_t period = 1000 / rateHz;
+  uint32_t tStart = millis();
+  uint16_t n=0;
+
+  double sumFlex[5]={0,0,0,0,0};
+  double sumGyro=0.0, sumAccel=0.0;
+
+  while (millis()-tStart < ms) {
+    mpu.update();
+
+    int raw1 = analogRead(FLEX1_PIN);
+    int raw2 = analogRead(FLEX2_PIN);
+    int raw3 = analogRead(FLEX3_PIN);
+    int raw4 = analogRead(FLEX4_PIN);
+    int raw5 = analogRead(FLEX5_PIN);
+
+    float f1 = raw1 / 4095.0f;
+    float f2 = raw2 / 4095.0f;
+    float f3 = raw3 / 4095.0f;
+    float f4 = raw4 / 4095.0f;
+    float f5 = raw5 / 4095.0f;
+
+    float gx = (mpu.getGyroX() - base.gx);
+    float gy = (mpu.getGyroY() - base.gy);
+    float gz = (mpu.getGyroZ() - base.gz);
+    float ax = (mpu.getAccX() - base.ax);
+    float ay = (mpu.getAccY() - base.ay);
+    float az = (mpu.getAccZ() - base.az);
+
+    float gnorm = sqrtf(gx*gx + gy*gy + gz*gz);
+    float anorm = sqrtf(ax*ax + ay*ay + az*az);
+
+    sumFlex[0]+=f1; sumFlex[1]+=f2; sumFlex[2]+=f3; sumFlex[3]+=f4; sumFlex[4]+=f5;
+    sumGyro  += gnorm;
+    sumAccel += anorm;
+    n++;
+
+    uint32_t tMark = millis();
+    while (millis()-tMark < period) { delay(1); }
   }
 
-  if (have==0) { memset(centroid[w],0,sizeof(centroid[w])); radiusW[w]=RADIUS_MAX; return; }
+  if (n==0) n=1;
+  for (int i=0;i<5;i++) wm.flex[i] = sumFlex[i]/n;
+  wm.gyroNorm  = sumGyro/n;
+  wm.accelNorm = sumAccel/n;
 
-  for (uint8_t i=0;i<N_FEAT;i++) centroid[w][i]=sum[i]/have;
+  return wm;
+}
 
-  float rsum=0; uint8_t rc=0;
-  for (uint8_t r=0;r<N_REPS;r++) {
-    bool valid=true;
-    for (uint8_t i=0;i<N_FEAT;i++) if (reps[r][i]==0 && centroid[w][i]==0) { valid=false; break; }
-    if (!valid) continue;
-    rsum += vecDist(reps[r], centroid[w], N_FEAT);
-    rc++;
+// ======================= DISTÂNCIA (RELATIVA) =======================
+// dflex: média das diferenças absolutas (0..1)
+// dg, da: diferenças RELATIVAS 0..1 (|Δ|/max(max(ref,probe),BASE))
+struct DistParts { float dflex, dg, da, total; float refG, refA; };
+
+static inline float relDiff(float a, float b, float baseRef) {
+  float M = max(max(a,b), baseRef);
+  float v = fabsf(a-b) / M;
+  if (v > 1.0f) v = 1.0f;
+  return v;
+}
+
+DistParts weightedDistanceParts(const WindowMeans& probe, const WindowMeans& ref) {
+  DistParts p{};
+  float df = 0.0f;
+  for (int i=0;i<5;i++){
+    df += fabsf(probe.flex[i] - ref.flex[i]);
   }
-  float rad = (rc? (rsum/rc) : RADIUS_MIN);
-  radiusW[w] = clampf(rad, RADIUS_MIN, RADIUS_MAX);
+  p.dflex = df / 5.0f;
+
+  p.dg = relDiff(probe.gyroNorm,  ref.gyroNorm,  GYRO_BASE);
+  p.da = relDiff(probe.accelNorm, ref.accelNorm, ACCEL_BASE);
+  p.refG = ref.gyroNorm;
+  p.refA = ref.accelNorm;
+
+  p.total = W_FLEX*p.dflex + W_GYRO*p.dg + W_ACCEL*p.da;
+  return p;
 }
 
-void recomputeAll() {
-  for (uint8_t w=0; w<N_WORDS; w++) recomputeCentroid(w);
+float weightedDistance(const WindowMeans& a, const WindowMeans& b) {
+  return weightedDistanceParts(a,b).total;
 }
 
-// -------------------- Setup --------------------
+// ======================= SETUP =======================
 void setup() {
   pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(LED_RED_PIN,   OUTPUT);
+  pinMode(LED_RED_PIN, OUTPUT);
   digitalWrite(LED_GREEN_PIN, LOW);
-  digitalWrite(LED_RED_PIN,   LOW);
+  digitalWrite(LED_RED_PIN, LOW);
 
-  pinMode(SWITCH_PIN, INPUT_PULLUP);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MODE_SWITCH_PIN, INPUT);
 
   Serial.begin(115200);
   delay(200);
 
-  // I2C
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-
   // OLED
-  Serial.println("[OLED] Inicializando...");
+  Wire.begin(OLED_SDA, OLED_SCL);
   oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  if (oledOK) { 
-    Serial.println("[OLED] OK"); 
-    display.clearDisplay(); display.display();
-  } else { 
-    Serial.println("[OLED] FALHA"); 
-    ledError(); 
-  }
+  if (oledOK) { oledMsg("OLED OK"); }
+  else { Serial.println("[OLED] FALHA"); }
 
-  // SD
+  // SD robusto
   Serial.println("[SD] Inicializando...");
+  pinMode(SD_CS_PIN, OUTPUT);
+  digitalWrite(SD_CS_PIN, HIGH);
   spiSD.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-  sdOK = SD.begin(SD_CS_PIN, spiSD);
-  if (sdOK) {
-    Serial.println("[SD] OK");
-  } else {
-    Serial.println("[SD] FALHA");
-    ledError();
+
+  sdOK = SD.begin(SD_CS_PIN, spiSD, 10 * 1000 * 1000);
+  if (!sdOK) {
+    Serial.println("[SD] 10MHz falhou. Tentando 4MHz...");
+    sdOK = SD.begin(SD_CS_PIN, spiSD, 4 * 1000 * 1000);
   }
+  if (sdOK) { Serial.println("[SD] OK"); ensureRefsFolder(); }
+  else      { Serial.println("[SD] FALHA - verifique pinos/3V3/FAT32"); }
 
   // DFPlayer
-  Serial.println("[DFP] Inicializando...");
   dfSerial.begin(9600, SERIAL_8N1, DF_RX_PIN, DF_TX_PIN);
-  dfOK = dfPlayer.begin(dfSerial, true, false);
-  if (dfOK) {
-    dfPlayer.volume(30); // max
-    Serial.println("[DFP] OK");
-  } else {
-    Serial.println("[DFP] FALHA");
-    ledError();
-  }
+  dfOK = dfPlayer.begin(dfSerial);
+  if (dfOK) { dfPlayer.volume(30); Serial.println("[DFP] OK"); }
+  else      { Serial.println("[DFP] FALHA"); }
 
   // MPU6050
   Serial.println("[MPU] Inicializando...");
-  byte rc = mpu.begin();
-  if (rc==0) {
-    mpu.setAccConfig(0x08);   // ±4g
-    mpu.setGyroConfig(0x08);  // ±500°/s
-    mpuOK = true;
-    Serial.println("[MPU] OK");
-  } else {
-    mpuOK = false;
-    Serial.printf("[MPU] FALHA (code=%u)\n", rc);
-    ledError();
-  }
-
-  // Calibração rápida de baseline
+  mpuOK = (mpu.begin()==0);
   if (mpuOK) {
+    mpu.calcGyroOffsets();   // v1.1.0 sem argumentos
+
+    // baseline 1s parado
     Serial.println("[CAL] Medindo baseline (1s)...");
-    uint32_t t0=millis();
-    float gsum[3]={0}, asum[3]={0};
+    uint32_t t0 = millis();
     uint16_t n=0;
+    double sgx=0,sgy=0,sgz=0,sax=0,say=0,saz=0;
     while (millis()-t0 < 1000) {
       mpu.update();
-      gsum[0]+=mpu.getGyroX(); gsum[1]+=mpu.getGyroY(); gsum[2]+=mpu.getGyroZ();
-      asum[0]+=mpu.getAccX();  asum[1]+=mpu.getAccY();  asum[2]+=mpu.getAccZ();
-      n++; delay(5);
+      sgx += mpu.getGyroX(); sgy+=mpu.getGyroY(); sgz+=mpu.getGyroZ();
+      sax += mpu.getAccX();  say+=mpu.getAccY();  saz+=mpu.getAccZ();
+      n++;
+      delay(5);
     }
-    if (n>0) {
-      gyroOff[0]=gsum[0]/n; gyroOff[1]=gsum[1]/n; gyroOff[2]=gsum[2]/n;
-      accOff[0]=asum[0]/n;  accOff[1]=asum[1]/n;  accOff[2]=asum[2]/n;
-    }
+    if (n==0) n=1;
+    base.gx = sgx/n; base.gy = sgy/n; base.gz = sgz/n;
+    base.ax = sax/n; base.ay = say/n; base.az = saz/n;
     Serial.printf("[CAL] GyroOff=(%.3f,%.3f,%.3f) AccOff=(%.3f,%.3f,%.3f)\n",
-      gyroOff[0],gyroOff[1],gyroOff[2],accOff[0],accOff[1],accOff[2]);
+                  base.gx,base.gy,base.gz, base.ax,base.ay,base.az);
+  } else {
+    Serial.println("[MPU] FALHA");
   }
 
-  // Recalcula centroides dos CSV (se já houver)
-  if (sdOK) recomputeAll();
-
-  // Status inicial
+  // STATUS
   Serial.println();
   Serial.println("=== STATUS INICIAL ===");
   Serial.printf("OLED=%s SD=%s DF=%s MPU=%s\n",
     oledOK?"OK":"FALHA", sdOK?"OK":"FALHA", dfOK?"OK":"FALHA", mpuOK?"OK":"FALHA");
   Serial.println("Switch MODO (GPIO26): HIGH=CAPTURA, LOW=REPRODUCAO.");
   Serial.println("Botao CAPTURE (GPIO25): clique unico -> 2s (captura/reproducao).");
+  Serial.println();
 
-  // Mensagem OLED
-  if (oledOK) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0,0);
-    display.println("Pronto");
-    display.println("HIGH=CAPTURA");
-    display.println("LOW=PLAY (clique)");
-    display.display();
-  }
+  oledMsg("Pronto", sdOK?"SD OK":"SD FAIL");
 }
 
-// -------------------- Loop --------------------
+// ======================= LOOP =======================
 void loop() {
-  // Log de mudança de modo (switch)
-  static int lastMode=-1;
-  int mode = digitalRead(SWITCH_PIN);
-  if (mode != lastMode) {
-    Serial.printf("[MODO] Switch(GPIO26)=%s -> %s\n",
-                  mode==HIGH?"HIGH":"LOW",
-                  mode==HIGH?"CAPTURA":"REPRODUCAO");
-    lastMode = mode;
-  }
+  Mode mode = readMode();
 
-  // ===================== MODO CAPTURA =====================
-  if (mode == HIGH) {
-    // mostra próxima palavra
-    uint8_t r = repIdx[wordIdx] + 1;
-    if (r<=N_REPS) {
-      Serial.printf("[CAPTURA] Proxima: \"%s\" (rep %u/%u) — clique para iniciar\n",
-        WORDS[wordIdx], (unsigned)r, (unsigned)N_REPS);
-    }
+  // ====== CAPTURA ======
+  if (mode == CAPTURE) {
+    static bool toldNext = false;
 
-    // aguardar clique (debounce)
-    while (digitalRead(SWITCH_PIN)==HIGH) {
-      if (digitalRead(BUTTON_PIN)==LOW) {
-        uint32_t now = millis();
-        if (now - lastBtnMs > 200) { // debounce 200ms
-          lastBtnMs = now;
-
-          // espera mão parada
-          if (mpuOK) waitStill(STILL_MS, STILL_GYRO_DPS);
-
-          // toca áudio da palavra atual
-          if (dfOK) dfPlayer.playMp3Folder(wordIdx+1);
-
-          // mensagem e OLED
-          char l1[64];
-          snprintf(l1,sizeof(l1),"\"%s\" rep %u — 2s", WORDS[wordIdx], (unsigned)(repIdx[wordIdx]+1));
-          if (oledOK) { display.clearDisplay(); display.setTextSize(1); display.setTextColor(SSD1306_WHITE); display.setCursor(0,0); display.println("CAPTURA"); display.println(l1); display.display(); }
-          Serial.printf("[CAPTURA] \"%s\" rep %u — iniciando 2s...\n",
-            WORDS[wordIdx], (unsigned)(repIdx[wordIdx]+1));
-
-          // captura mean (ponderado)
-          float feat[N_FEAT];
-          if (!captureMean(feat, true)) {
-            Serial.println("[ERRO] Falha na captura (amostras=0)");
-            ledError();
-            break;
-          }
-
-          // salva CSV
-          if (sdOK) {
-            if (!saveCSV(SAFE[wordIdx], repIdx[wordIdx]+1, feat)) {
-              Serial.println("[ERRO] Falha ao salvar CSV");
-              ledError();
-            }
-          }
-
-          // atualiza réplica e, se fechou 3/3, recomputa centróide e avança palavra
-          repIdx[wordIdx]++;
-          if (repIdx[wordIdx] >= N_REPS) {
-            Serial.printf("[CAPTURA] Concluidas 3 capturas de \"%s\". Siga para a proxima.\n", WORDS[wordIdx]);
-            if (sdOK) recomputeCentroid(wordIdx);
-            if (wordIdx+1 < N_WORDS) {
-              wordIdx++;
-              Serial.printf("[CAPTURA] Avancando: \"%s\" (rep 1/%u)\n", WORDS[wordIdx], (unsigned)N_REPS);
-            } else {
-              Serial.println("[CAPTURA] Todas as palavras concluidas!");
-            }
-          } else {
-            Serial.printf("[CAPTURA] Proxima réplica de \"%s\" (rep %u/%u) — clique para iniciar\n",
-              WORDS[wordIdx], (unsigned)(repIdx[wordIdx]+1), (unsigned)N_REPS);
-          }
-
-          ledOK(); // sucesso
-        }
-        // espera soltar
-        while (digitalRead(BUTTON_PIN)==LOW) delay(5);
+    if (currentWord < NUM_WORDS) {
+      uint8_t r = repDone[currentWord];
+      if (!toldNext) {
+        Serial.printf("[CAPTURA] Proxima: \"%s\" (rep %u/%u) — clique para iniciar\n",
+                      words[currentWord], r+1, REPS_PER_WORD);
+        oledMsg("CAPTURA", String(words[currentWord]) + " rep " + String(r+1));
+        toldNext = true;
       }
-      delay(5);
-    }
 
-    delay(10);
-    return;
-  }
-
-  // ===================== MODO REPRODUÇÃO =====================
-  // >>>>> CORREÇÃO: Somente reconhece AO CLICAR o botão (não mais automático) <<<<<
-  if (digitalRead(SWITCH_PIN)==LOW) {
-    // dica no serial (uma vez a cada ciclo)
-    static uint32_t lastHint=0;
-    if (millis()-lastHint > 1000) {
-      Serial.println("[PLAY] Pronto para reconhecer — clique o botao para iniciar 2s.");
-      lastHint = millis();
-    }
-
-    // espera clique com debounce
-    if (digitalRead(BUTTON_PIN)==LOW) {
-      uint32_t now = millis();
-      if (now - lastBtnMs > 200) {
-        lastBtnMs = now;
-
-        // mão parada antes de capturar
-        if (mpuOK) waitStill(STILL_MS, STILL_GYRO_DPS);
-
-        if (oledOK) { display.clearDisplay(); display.setTextSize(1); display.setTextColor(SSD1306_WHITE); display.setCursor(0,0); display.println("PLAY"); display.println("capturando 2s..."); display.display(); }
-        Serial.println("[PLAY] Capturando 2s para reconhecimento...");
-
-        float x[N_FEAT];
-        if (!captureMean(x, false)) {
-          Serial.println("[ERRO] Falha na captura de play");
-          ledError();
-          // espera soltar
-          while (digitalRead(BUTTON_PIN)==LOW) delay(5);
-          return;
-        }
-
-        // distâncias/z para cada palavra
-        float d[N_WORDS];
-        float z[N_WORDS];
-
-        for (uint8_t w=0; w<N_WORDS; w++) {
-          d[w] = vecDist(x, centroid[w], N_FEAT);
-          float rad = (radiusW[w] > 0 ? radiusW[w] : RADIUS_MIN);
-          float radc = clampf(rad, RADIUS_MIN, RADIUS_MAX);
-          z[w] = d[w] / radc;
-        }
-
-        for (uint8_t w=0; w<N_WORDS; w++) {
-          Serial.printf("[PLAY] %-11s d=%.3f  z=%.3f  lim=%.3f\n",
-            WORDS[w], d[w], z[w], radiusW[w]*1.6f);
-        }
-
-        int best=0, second=1;
-        if (d[1] < d[0]) { best=1; second=0; }
-        for (uint8_t w=2; w<N_WORDS; w++) {
-          if (d[w] < d[best]) { second = best; best = w; }
-          else if (d[w] < d[second]) { second = w; }
-        }
-
-        float ratio = d[second]/d[best];
-        bool lowMargin = (ratio < MIN_RATIO);
-
-        Serial.printf("[DECISION] \"%s\"  d1=%.3f d2=%.3f  z1=%.3f z2=%.3f  ratio=%.3f  (min=%.3f)\n",
-          WORDS[best], d[best], d[second], z[best], z[second], ratio, MIN_RATIO);
-
+      if (buttonClicked()) {
         if (dfOK) {
-          dfPlayer.playMp3Folder(best+1); // 1..10
-          Serial.printf("[PLAY] Reconhecido: \"%s\" -> faixa %u\n", WORDS[best], (unsigned)(best+1));
+          // arquivos em /mp3/0001.mp3..0010.mp3
+          dfPlayer.playMp3Folder(trackOfWord[currentWord]);
         }
 
-        if (lowMargin) { Serial.println("[WARN] Margem baixa: gesto similar a outra palavra"); ledError(); }
-        else           { ledOK(); }
+        Serial.println("[PREP] Aguardando mao parada (gyro<5 dps e accel<1.5 m/s2 por 0.3s)...");
+        waitHandStill(300, 5.0f, 1.5f, 2500);
 
-        // espera soltar o botão antes de permitir outro reconhecimento
-        while (digitalRead(BUTTON_PIN)==LOW) delay(5);
+        Serial.printf("[CAPTURA] \"%s\" rep %u — iniciando 2s...\n",
+                      words[currentWord], r+1);
+
+        WindowMeans wm = captureWindow(WINDOW_MS, SAMPLE_RATE_HZ);
+
+        for (int i=0;i<5;i++) meanFlex[currentWord][r][i] = wm.flex[i];
+        meanGyro[currentWord][r]  = wm.gyroNorm;
+        meanAccel[currentWord][r] = wm.accelNorm;
+
+        Serial.printf("[CAPTURA] mean flex=[%.3f,%.3f,%.3f,%.3f,%.3f]  gyro|=%.3f  accel|=%.3f\n",
+          wm.flex[0],wm.flex[1],wm.flex[2],wm.flex[3],wm.flex[4], wm.gyroNorm, wm.accelNorm);
+
+        if (sdOK) saveCSV(currentWord, r, wm.flex, wm.gyroNorm, wm.accelNorm);
+
+        repDone[currentWord]++;
+        ledGreenBlink(1, 80, 60);
+
+        if (repDone[currentWord] >= REPS_PER_WORD) {
+          Serial.printf("[CAPTURA] Concluidas %u capturas de \"%s\". Siga para a proxima.\n",
+                        REPS_PER_WORD, words[currentWord]);
+          currentWord++;
+          toldNext = false;
+        } else {
+          Serial.printf("[CAPTURA] Proxima réplica de \"%s\" (rep %u/%u) — clique para iniciar\n",
+                        words[currentWord], repDone[currentWord]+1, REPS_PER_WORD);
+          oledMsg("CAPTURA", String(words[currentWord]) + " rep " + String(repDone[currentWord]+1));
+          toldNext = true;
+        }
+      }
+    } else {
+      static bool once = false;
+      if (!once) {
+        Serial.println("[CAPTURA] Todas as palavras concluidas!");
+        oledMsg("CAPTURA", "Concluida");
+        once = true;
       }
     }
 
-    delay(5);
-    return;
+  // ====== REPRODUCAO ======
+  } else { // PLAY
+    static bool toldReady = false;
+    if (!toldReady) {
+      Serial.println("[PLAY] Pronto para reconhecer — clique o botao para iniciar 2s.");
+      oledMsg("REPRODUCAO", "Clique para ler");
+      toldReady = true;
+    }
+
+    if (buttonClicked()) {
+      toldReady = false;
+
+      bool haveAny=false;
+      for (uint8_t w=0; w<NUM_WORDS; ++w) if (repDone[w]>0) { haveAny=true; break; }
+      if (!haveAny) {
+        Serial.println("[PLAY] Sem base de referencia. Entre em CAPTURA primeiro.");
+        ledRedBlink(2,120,120);
+        return;
+      }
+
+      Serial.println("[PREP] Aguardando mao parada (gyro<5 dps e accel<1.5 m/s2 por 0.3s)...");
+      waitHandStill(300, 5.0f, 1.5f, 2500);
+
+      Serial.println("[PLAY] Capturando 2s para reconhecimento...");
+      WindowMeans probe = captureWindow(WINDOW_MS, SAMPLE_RATE_HZ);
+      Serial.printf("[PLAY] probe: gyro|=%.3f accel|=%.3f\n", probe.gyroNorm, probe.accelNorm);
+
+      float bestD = 1e9f; int bestW=-1; int bestRep=-1;
+      float secondD = 1e9f; int secondW=-1;
+
+      // Para heurística flex-first
+      float bestDFlex = 1e9f; int bestDFlexW=-1;
+      float secondDFlex = 1e9f;
+
+      // avalia por réplica (min distance por palavra)
+      for (uint8_t w=0; w<NUM_WORDS; ++w) {
+        if (repDone[w]==0) continue;
+
+        float bestWordD = 1e9f; int bestWordRep=-1; DistParts bestParts{};
+        float bestWordDFlex = 1e9f;
+
+        for (int r=0; r<repDone[w]; ++r) {
+          WindowMeans ref{};
+          for (int i=0;i<5;i++) ref.flex[i] = meanFlex[w][r][i];
+          ref.gyroNorm  = meanGyro[w][r];
+          ref.accelNorm = meanAccel[w][r];
+
+          DistParts parts = weightedDistanceParts(probe, ref);
+          float d = parts.total;
+
+          if (parts.dflex < bestWordDFlex) bestWordDFlex = parts.dflex;
+
+          if (d < bestWordD) {
+            bestWordD = d; bestWordRep = r; bestParts = parts;
+          }
+        }
+
+        // manter ranking por dflex
+        if (bestWordDFlex < bestDFlex) {
+          secondDFlex = bestDFlex;
+          bestDFlex = bestWordDFlex;
+          bestDFlexW = w;
+        } else if (bestWordDFlex < secondDFlex) {
+          secondDFlex = bestWordDFlex;
+        }
+
+        Serial.printf("[PLAY] %-11s d=%.3f  (dflex=%.3f dg=%.3f da=%.3f)  rep=%d  ref(gyro=%.2f,acc=%.2f)\n",
+          words[w], bestWordD, bestParts.dflex, bestParts.dg, bestParts.da, bestWordRep+1, bestParts.refG, bestParts.refA);
+
+        // atualiza melhor e segundo no combinado
+        if (bestWordD < bestD) {
+          secondD=bestD; secondW=bestW;
+          bestD=bestWordD; bestW=w; bestRep=bestWordRep;
+        } else if (bestWordD < secondD) {
+          secondD=bestWordD; secondW=w;
+        }
+      }
+
+      // Heurística flex-first: se flex do melhor estiver muito à frente, privilegia
+      bool flexFirst = false;
+      if (bestDFlexW>=0 && bestDFlex < 0.04f && bestDFlex < 0.5f * secondDFlex) {
+        flexFirst = true;
+        bestW = bestDFlexW;
+      }
+
+      float ratio = (secondD<=0.0f) ? 999.0f : (bestD / secondD);
+      const float MIN_RATIO = 0.80f;
+
+      if (bestW>=0 && (ratio < MIN_RATIO || flexFirst)) {
+        Serial.printf("[DECISION] \"%s\"  d1=%.3f d2=%.3f  ratio=%.3f (min=%.3f)%s\n",
+                      words[bestW], bestD, secondD, ratio, MIN_RATIO, flexFirst?"  [flex-first]":"");
+        if (dfOK) dfPlayer.playMp3Folder(trackOfWord[bestW]);
+        ledGreenBlink(2, 120, 80);
+        oledMsg("Reconhecido:", words[bestW]);
+      } else {
+        Serial.printf("[DECISION] Indefinido  d1=%.3f d2=%.3f  ratio=%.3f (min=%.3f)\n",
+                      bestD, secondD, ratio, MIN_RATIO);
+        ledRedBlink(2, 120, 120);
+        oledMsg("Nao reconhecido", "");
+      }
+    }
   }
 }
