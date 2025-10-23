@@ -6,6 +6,9 @@
 #include <DFRobotDFPlayerMini.h>
 #include <SPI.h>
 #include <SD.h>
+#include <vector>
+#include <algorithm>
+#include <math.h>
 
 // ======================= PINOS =======================
 #define OLED_SDA        21
@@ -72,11 +75,11 @@ static const uint8_t trackOfWord[NUM_WORDS] = {1,2,3,4,5,6,7,8,9,10};
 enum Mode {CAPTURE=0, PLAY=1};
 
 // ====== pesos (depois da normalização) ======
-float W_FLEX  = 1.2f;   // média dos 5 flex (0..1)
-float W_GYRO  = 0.25f;  // termo relativo 0..1
-float W_ACCEL = 0.25f;  // termo relativo 0..1
+float W_FLEX  = 1.6f;   // era 1.2f
+float W_GYRO  = 0.20f;  // era 0.25f
+float W_ACCEL = 0.20f;  // era 0.25f
 
-// ====== “bases” para normalização relativa (evita penalizar Δ pequeno em gestos fortes) ======
+// ====== bases para normalização relativa ======
 const float GYRO_BASE  = 50.0f;   // dps
 const float ACCEL_BASE = 1.20f;   // m/s²
 
@@ -211,6 +214,7 @@ struct WindowMeans {
 WindowMeans captureWindow(uint16_t ms=WINDOW_MS, uint16_t rateHz=SAMPLE_RATE_HZ) {
   WindowMeans wm{};
   const uint16_t period = 1000 / rateHz;
+  const uint16_t discard_ms = 200;  // descarta o início para evitar contaminação
   uint32_t tStart = millis();
   uint16_t n=0;
 
@@ -242,10 +246,13 @@ WindowMeans captureWindow(uint16_t ms=WINDOW_MS, uint16_t rateHz=SAMPLE_RATE_HZ)
     float gnorm = sqrtf(gx*gx + gy*gy + gz*gz);
     float anorm = sqrtf(ax*ax + ay*ay + az*az);
 
-    sumFlex[0]+=f1; sumFlex[1]+=f2; sumFlex[2]+=f3; sumFlex[3]+=f4; sumFlex[4]+=f5;
-    sumGyro  += gnorm;
-    sumAccel += anorm;
-    n++;
+    // só acumula depois do descarte inicial
+    if (millis() - tStart >= discard_ms) {
+      sumFlex[0]+=f1; sumFlex[1]+=f2; sumFlex[2]+=f3; sumFlex[3]+=f4; sumFlex[4]+=f5;
+      sumGyro  += gnorm;
+      sumAccel += anorm;
+      n++;
+    }
 
     uint32_t tMark = millis();
     while (millis()-tMark < period) { delay(1); }
@@ -265,7 +272,7 @@ WindowMeans captureWindow(uint16_t ms=WINDOW_MS, uint16_t rateHz=SAMPLE_RATE_HZ)
 struct DistParts { float dflex, dg, da, total; float refG, refA; };
 
 static inline float relDiff(float a, float b, float baseRef) {
-  float M = max(max(a,b), baseRef);
+  float M = fmaxf(fmaxf(a,b), baseRef);
   float v = fabsf(a-b) / M;
   if (v > 1.0f) v = 1.0f;
   return v;
@@ -461,76 +468,90 @@ void loop() {
       WindowMeans probe = captureWindow(WINDOW_MS, SAMPLE_RATE_HZ);
       Serial.printf("[PLAY] probe: gyro|=%.3f accel|=%.3f\n", probe.gyroNorm, probe.accelNorm);
 
-      float bestD = 1e9f; int bestW=-1; int bestRep=-1;
-      float secondD = 1e9f; int secondW=-1;
+      // ===== k-NN sobre todas as réplicas (gate por dflex + votação ponderada) =====
+      struct Neighbor { uint8_t w, r; float d, dflex, dg, da; };
+      std::vector<Neighbor> pool;
+      pool.reserve(NUM_WORDS * REPS_PER_WORD);
 
-      // Para heurística flex-first
-      float bestDFlex = 1e9f; int bestDFlexW=-1;
-      float secondDFlex = 1e9f;
+      float bestDFlexGlobal = 1e9f;
 
-      // avalia por réplica (min distance por palavra)
       for (uint8_t w=0; w<NUM_WORDS; ++w) {
-        if (repDone[w]==0) continue;
-
-        float bestWordD = 1e9f; int bestWordRep=-1; DistParts bestParts{};
-        float bestWordDFlex = 1e9f;
-
-        for (int r=0; r<repDone[w]; ++r) {
+        for (uint8_t r=0; r<repDone[w]; ++r) {
           WindowMeans ref{};
           for (int i=0;i<5;i++) ref.flex[i] = meanFlex[w][r][i];
           ref.gyroNorm  = meanGyro[w][r];
           ref.accelNorm = meanAccel[w][r];
 
           DistParts parts = weightedDistanceParts(probe, ref);
-          float d = parts.total;
+          pool.push_back(Neighbor{w, r, parts.total, parts.dflex, parts.dg, parts.da});
 
-          if (parts.dflex < bestWordDFlex) bestWordDFlex = parts.dflex;
+          if (parts.dflex < bestDFlexGlobal) bestDFlexGlobal = parts.dflex;
 
-          if (d < bestWordD) {
-            bestWordD = d; bestWordRep = r; bestParts = parts;
-          }
-        }
-
-        // manter ranking por dflex
-        if (bestWordDFlex < bestDFlex) {
-          secondDFlex = bestDFlex;
-          bestDFlex = bestWordDFlex;
-          bestDFlexW = w;
-        } else if (bestWordDFlex < secondDFlex) {
-          secondDFlex = bestWordDFlex;
-        }
-
-        Serial.printf("[PLAY] %-11s d=%.3f  (dflex=%.3f dg=%.3f da=%.3f)  rep=%d  ref(gyro=%.2f,acc=%.2f)\n",
-          words[w], bestWordD, bestParts.dflex, bestParts.dg, bestParts.da, bestWordRep+1, bestParts.refG, bestParts.refA);
-
-        // atualiza melhor e segundo no combinado
-        if (bestWordD < bestD) {
-          secondD=bestD; secondW=bestW;
-          bestD=bestWordD; bestW=w; bestRep=bestWordRep;
-        } else if (bestWordD < secondD) {
-          secondD=bestWordD; secondW=w;
+          Serial.printf("[PLAY] %-11s d=%.3f  (dflex=%.3f dg=%.3f da=%.3f)  rep=%d  ref(gyro=%.2f,acc=%.2f)\n",
+                        words[w], parts.total, parts.dflex, parts.dg, parts.da, r+1, ref.gyroNorm, ref.accelNorm);
         }
       }
 
-      // Heurística flex-first: se flex do melhor estiver muito à frente, privilegia
-      bool flexFirst = false;
-      if (bestDFlexW>=0 && bestDFlex < 0.04f && bestDFlex < 0.5f * secondDFlex) {
-        flexFirst = true;
-        bestW = bestDFlexW;
+      if (pool.empty()) {
+        Serial.println("[DECISION] Sem referências.");
+        oledMsg("Sem refs","Capture primeiro");
+        ledRedBlink(2);
+        return;
       }
 
-      float ratio = (secondD<=0.0f) ? 999.0f : (bestD / secondD);
-      const float MIN_RATIO = 0.80f;
+      std::sort(pool.begin(), pool.end(), [](const Neighbor& a, const Neighbor& b){
+        return a.d < b.d;
+      });
 
-      if (bestW>=0 && (ratio < MIN_RATIO || flexFirst)) {
-        Serial.printf("[DECISION] \"%s\"  d1=%.3f d2=%.3f  ratio=%.3f (min=%.3f)%s\n",
-                      words[bestW], bestD, secondD, ratio, MIN_RATIO, flexFirst?"  [flex-first]":"");
-        if (dfOK) dfPlayer.playMp3Folder(trackOfWord[bestW]);
+      // Gate por dflex mais estreito
+      std::vector<Neighbor> gated;
+      gated.reserve(pool.size());
+      for (auto& nb : pool) {
+        if (nb.dflex <= bestDFlexGlobal + 0.006f) gated.push_back(nb);
+      }
+      if (gated.empty()) gated = pool; // fallback defensivo
+
+      // pega top-K (K=3)
+      const int K = 3;
+      if ((int)gated.size() > K) gated.resize(K);
+
+      // log dos vizinhos
+      for (auto& nb : gated) {
+        Serial.printf("[KNN] %-11s rep=%d  d=%.3f (dflex=%.3f dg=%.3f da=%.3f)\n",
+          words[nb.w], nb.r+1, nb.d, nb.dflex, nb.dg, nb.da);
+      }
+
+      // votação ponderada (1/(d^2))
+      float score[NUM_WORDS] = {0};
+      const float K_EPS = 1e-6f;
+      for (auto& nb : gated) {
+        float wgt = 1.0f / (K_EPS + nb.d * nb.d);
+        score[nb.w] += wgt;
+      }
+
+      // encontra vencedor e runner-up
+      int winW = -1, runW = -1;
+      float winS = -1, runS = -1;
+      for (uint8_t w=0; w<NUM_WORDS; ++w) {
+        if (score[w] > winS) { runS=winS; runW=winW; winS=score[w]; winW=w; }
+        else if (score[w] > runS) { runS=score[w]; runW=w; }
+      }
+
+      // checa consistência: pelo menos 2 dos top-3 pertencem a winW
+      int agreeTop3 = 0;
+      for (int i=0; i<(int)gated.size() && i<3; ++i) if (gated[i].w == winW) agreeTop3++;
+
+      // margem mínima entre 1º e 2º
+      const float MIN_MARGIN = 1.15f; // 15%
+      if (winW>=0 && agreeTop3 >= 2 && winS >= MIN_MARGIN * runS) {
+        Serial.printf("[DECISION] \"%s\"  score=%.3f vs %.3f  top3_agree=%d\n",
+                      words[winW], winS, runS, agreeTop3);
+        if (dfOK) dfPlayer.playMp3Folder(trackOfWord[winW]);
         ledGreenBlink(2, 120, 80);
-        oledMsg("Reconhecido:", words[bestW]);
+        oledMsg("Reconhecido:", words[winW]);
       } else {
-        Serial.printf("[DECISION] Indefinido  d1=%.3f d2=%.3f  ratio=%.3f (min=%.3f)\n",
-                      bestD, secondD, ratio, MIN_RATIO);
+        Serial.printf("[DECISION] Indefinido  score1=%.3f score2=%.3f  top3_agree=%d\n",
+                      winS, runS, agreeTop3);
         ledRedBlink(2, 120, 120);
         oledMsg("Nao reconhecido", "");
       }
