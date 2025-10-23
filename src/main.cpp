@@ -240,7 +240,8 @@ void resetCaptureSession(bool announce=true){
   currentWord=0;
   if(announce){
     Serial.println("[CAPTURA] Nova sessão: segure o botão para gravar; solte para salvar.");
-    oledMsg("CAPTURA","Segure p/ gravar");
+    // Mostra já o próximo alvo/rep no display
+    oledMsg("CAPTURA", String(words[currentWord])+" rep 1 (pronto)");
   }
 }
 
@@ -302,10 +303,20 @@ void loop(){
   static Mode lastMode=readMode();
   Mode mode=readMode();
 
+  // cache do "prompt" mostrado no OLED (evita flicker/spam)
+  static int lastShownWord = -1;
+  static int lastShownRep  = -1;
+
   // detecção de troca de modo
   if(mode!=lastMode){
-    if(mode==CAPTURE) resetCaptureSession(true);
-    else { oledMsg("REPRODUCAO","Segure para ler"); Serial.println("[PLAY] Segure o botão para gravar o gesto; solte para classificar."); }
+    if(mode==CAPTURE){
+      resetCaptureSession(true);
+      lastShownWord = -1;  // reseta o cache de prompt
+      lastShownRep  = -1;
+    } else {
+      oledMsg("REPRODUCAO","Segure para ler");
+      Serial.println("[PLAY] Segure o botão para gravar o gesto; solte para classificar.");
+    }
     lastMode=mode;
   }
 
@@ -315,20 +326,35 @@ void loop(){
 
   // ====== CAPTURA ======
   if(mode==CAPTURE){
+    // Quando NÃO estiver gravando, mostre o próximo alvo claramente
+    if(!rec.active && currentWord<NUM_WORDS){
+      int repIdx = repDone[currentWord] + 1;
+      if(lastShownWord!=currentWord || lastShownRep!=repIdx){
+        lastShownWord = currentWord;
+        lastShownRep  = repIdx;
+        Serial.printf("[CAPTURA] Pronto: \"%s\" rep %d — segure o botão.\n",
+                      words[currentWord], repIdx);
+        oledMsg("CAPTURA", String(words[currentWord])+" rep "+String(repIdx)+" (pronto)");
+      }
+    }
+
     if(currentWord<NUM_WORDS){
       // Início de gravação
       if(btn.pressedEdge()){
         ledGreen(true);
-        rec.start();
-        if(dfOK) dfPlayer.playMp3Folder(trackOfWord[currentWord]); // fala a palavra-alvo
-        Serial.printf("[CAPTURA] Gravando \"%s\" rep %u... (segure)\n", words[currentWord], repDone[currentWord]+1);
+        // Mostra antes de iniciar a coleta
         oledMsg("CAPTURA", String(words[currentWord])+" (gravando)");
+        Serial.printf("[CAPTURA] Gravando \"%s\" rep %u... (segure)\n",
+                      words[currentWord], repDone[currentWord]+1);
+        if(dfOK) dfPlayer.playMp3Folder(trackOfWord[currentWord]); // fala a palavra-alvo
+        rec.start();
       }
 
       // Fim de gravação
       if(btn.releasedEdge() && rec.active){
         WindowMeans wm = rec.stop();
         ledGreen(false);
+        Serial.println("[CAPTURA] Concluido.");
 
         if(!rec.enough()){
           Serial.println("[CAPTURA] Janela curta/insuficiente — descartada.");
@@ -352,14 +378,16 @@ void loop(){
             currentWord++;
           }
           if(currentWord<NUM_WORDS){
-            oledMsg("CAPTURA", String(words[currentWord])+" rep "+String(repDone[currentWord]+1));
+            oledMsg("CAPTURA", String(words[currentWord])+" rep "+String(repDone[currentWord]+1)+" (pronto)");
+            lastShownWord = -1; lastShownRep = -1; // força refresh se precisar
           }else{
-            oledMsg("CAPTURA","Concluida");
+            oledMsg("CAPTURA","Concluida — troque de modo");
+            Serial.println("[CAPTURA] Sessão concluída. Mude o switch para REPRODUCAO.");
           }
         }
       }
     }else{
-      // tudo concluído
+      // tudo concluído — aguardando troca de modo
     }
 
   // ====== REPRODUÇÃO ======
@@ -376,6 +404,7 @@ void loop(){
     if(btn.releasedEdge() && rec.active){
       WindowMeans probe = rec.stop();
       ledGreen(false);
+      Serial.println("[PLAY] Concluido.");
 
       // checar refs
       bool haveAny=false;
@@ -427,7 +456,11 @@ void loop(){
 
       float score[NUM_WORDS]={0};
       const float KNN_EPS = 1e-6f;
-      for(auto& nb: gated){ float wgt = 1.0f / (EPS + nb.d * nb.d); score[nb.w]+=wgt; }
+      for(auto& nb: gated){
+        // Corrigido para usar KNN_EPS (evita colisão com macro EPS do SDK)
+        float wgt = 1.0f / (KNN_EPS + nb.d * nb.d);
+        score[nb.w]+=wgt;
+      }
 
       int win=-1, run=-1; float sWin=-1, sRun=-1;
       for(uint8_t w=0;w<NUM_WORDS;w++){
