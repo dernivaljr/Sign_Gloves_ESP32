@@ -83,6 +83,11 @@ float W_ACCEL = 0.20f;  // era 0.25f
 const float GYRO_BASE  = 50.0f;   // dps
 const float ACCEL_BASE = 1.20f;   // m/s²
 
+// ====== decisão (NEW) ======
+const float MARGIN_MIN = 0.20f;       // (d2-d1)/d2
+const float DEFAULT_THR = 0.40f;      // fallback se não houver threshold aprendido
+float gestureThr[NUM_WORDS];          // thresholds por gesto (carrega/salva SD)
+
 // buffers e estado (armazenamos cada réplica)
 float meanFlex[NUM_WORDS][REPS_PER_WORD][5]; // 5 flex
 float meanGyro[NUM_WORDS][REPS_PER_WORD];    // norma
@@ -184,10 +189,54 @@ bool ensureRefsFolder() {
   return true;
 }
 
+// ---------- salvar/caregar thresholds (NEW) ----------
+bool saveThresholdsToSD() {
+  if (!sdOK) return false;
+  if (!ensureRefsFolder()) return false;
+  File f = SD.open("/refs/thresholds.csv", FILE_WRITE);
+  if (!f) { Serial.println("[SD] Falha ao abrir thresholds.csv p/ escrita"); return false; }
+  f.println("slug,threshold");
+  for (uint8_t w=0; w<NUM_WORDS; ++w) {
+    f.printf("%s,%.6f\n", slugs[w], gestureThr[w]);
+  }
+  f.close();
+  Serial.println("[SD] thresholds.csv salvo");
+  return true;
+}
+
+bool loadThresholdsFromSD() {
+  for (uint8_t w=0; w<NUM_WORDS; ++w) gestureThr[w] = DEFAULT_THR;
+  if (!sdOK) return false;
+  File f = SD.open("/refs/thresholds.csv", FILE_READ);
+  if (!f) { Serial.println("[SD] thresholds.csv não encontrado (usando defaults)"); return false; }
+  // pula cabeçalho
+  String header = f.readStringUntil('\n');
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim(); if (!line.length()) continue;
+    int comma = line.indexOf(',');
+    if (comma < 0) continue;
+    String sSlug = line.substring(0, comma);
+    String sThr  = line.substring(comma+1);
+    sSlug.trim(); sThr.trim();
+    float thr = sThr.toFloat();
+    for (uint8_t w=0; w<NUM_WORDS; ++w) {
+      if (sSlug.equals(slugs[w])) {
+        gestureThr[w] = (thr>0.0f ? thr : DEFAULT_THR);
+        break;
+      }
+    }
+  }
+  f.close();
+  Serial.println("[SD] thresholds.csv carregado");
+  return true;
+}
+
 bool saveCSV(uint8_t w, uint8_t r,
              const float flex[5], float gyroNorm, float accelNorm)
 {
   if (!sdOK) return false;
+  if (!ensureRefsFolder()) return false;
   char path[64];
   snprintf(path, sizeof(path), "/refs/%s_rep%u.csv", slugs[w], (unsigned)(r+1));
   File f = SD.open(path, FILE_WRITE);
@@ -202,6 +251,57 @@ bool saveCSV(uint8_t w, uint8_t r,
   f.close();
   Serial.printf("[CAPTURA] Salvo: %s\n", path);
   return true;
+}
+
+// ---------- carregar refs do SD (NEW) ----------
+bool loadRefsFromSD() {
+  if (!sdOK) return false;
+  bool any=false;
+  for (uint8_t w=0; w<NUM_WORDS; ++w) {
+    repDone[w] = 0;
+    for (uint8_t r=0; r<REPS_PER_WORD; ++r) {
+      char path[64];
+      snprintf(path, sizeof(path), "/refs/%s_rep%u.csv", slugs[w], (unsigned)(r+1));
+      if (!SD.exists(path)) continue;
+
+      File f = SD.open(path, FILE_READ);
+      if (!f) continue;
+
+      // formato simples: sensor,value (linhas)
+      float fvals[5] = {0,0,0,0,0};
+      float gy=0, ac=0;
+      int gotFlex=0, gotGy=0, gotAc=0;
+
+      // pula cabeçalho
+      String header = f.readStringUntil('\n');
+      while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim(); if (!line.length()) continue;
+        int comma = line.indexOf(',');
+        if (comma<0) continue;
+        String key = line.substring(0, comma);
+        String val = line.substring(comma+1);
+        key.trim(); val.trim();
+        float v = val.toFloat();
+        if (key.startsWith("flex")) {
+          int idx = key.substring(4).toInt(); // 1..5
+          if (idx>=1 && idx<=5) { fvals[idx-1] = v; gotFlex++; }
+        } else if (key == "gyro_norm") { gy = v; gotGy=1; }
+        else if (key == "accel_norm") { ac = v; gotAc=1; }
+      }
+      f.close();
+
+      if (gotFlex>=5 && gotGy && gotAc) {
+        for (int i=0;i<5;i++) meanFlex[w][r][i] = fvals[i];
+        meanGyro[w][r] = gy;
+        meanAccel[w][r] = ac;
+        repDone[w] = max<uint8_t>(repDone[w], r+1);
+        any = true;
+      }
+    }
+  }
+  if (any) Serial.println("[SD] Refs carregadas do SD");
+  return any;
 }
 
 // ======================= CAPTURA DE JANELA =======================
@@ -299,6 +399,48 @@ float weightedDistance(const WindowMeans& a, const WindowMeans& b) {
   return weightedDistanceParts(a,b).total;
 }
 
+// ======================= STATS AUX (NEW) =======================
+float p95(std::vector<float>& v) {
+  if (v.empty()) return DEFAULT_THR;
+  std::sort(v.begin(), v.end());
+  size_t idx = (size_t)floor(0.95f * v.size());
+  if (idx >= v.size()) idx = v.size()-1;
+  return v[idx];
+}
+
+// leave-one-out: para cada réplica, distância ao melhor "vizinho" da MESMA palavra
+void recomputeThresholds() {
+  for (uint8_t w=0; w<NUM_WORDS; ++w) {
+    std::vector<float> ds;
+    uint8_t R = repDone[w];
+    if (R < 2) { gestureThr[w] = DEFAULT_THR; continue; } // precisa >=2 p/ LOO
+
+    for (uint8_t r=0; r<R; ++r) {
+      WindowMeans refR{};
+      for (int i=0;i<5;i++) refR.flex[i] = meanFlex[w][r][i];
+      refR.gyroNorm  = meanGyro[w][r];
+      refR.accelNorm = meanAccel[w][r];
+
+      float bestSame = 1e9f;
+      for (uint8_t r2=0; r2<R; ++r2) if (r2!=r) {
+        WindowMeans ref2{};
+        for (int i=0;i<5;i++) ref2.flex[i] = meanFlex[w][r2][i];
+        ref2.gyroNorm  = meanGyro[w][r2];
+        ref2.accelNorm = meanAccel[w][r2];
+        float d = weightedDistance(refR, ref2);
+        if (d < bestSame) bestSame = d;
+      }
+      if (bestSame < 1e9f) ds.push_back(bestSame);
+    }
+
+    float thr = (ds.size()>=2) ? 1.05f * p95(ds) : DEFAULT_THR;
+    if (thr <= 0.0f) thr = DEFAULT_THR;
+    gestureThr[w] = thr;
+    Serial.printf("[THR] %s = %.3f (N=%u)\n", words[w], thr, (unsigned)ds.size());
+  }
+  saveThresholdsToSD();
+}
+
 // ======================= SETUP =======================
 void setup() {
   pinMode(LED_GREEN_PIN, OUTPUT);
@@ -365,6 +507,22 @@ void setup() {
     Serial.println("[MPU] FALHA");
   }
 
+  // init thresholds default
+  for (uint8_t w=0; w<NUM_WORDS; ++w) gestureThr[w] = DEFAULT_THR;
+
+  // Carrega refs/thresholds existentes do SD (NEW)
+  bool hadRefs = loadRefsFromSD();
+  loadThresholdsFromSD();
+  if (hadRefs) {
+    // se não havia thresholds salvos (ficaram default), tenta recomputar
+    bool needRecompute=false;
+    for (uint8_t w=0; w<NUM_WORDS; ++w) if (repDone[w]>=2 && fabsf(gestureThr[w]-DEFAULT_THR)<1e-5) { needRecompute=true; break; }
+    if (needRecompute) {
+      Serial.println("[THR] Recomputando thresholds a partir das refs carregadas...");
+      recomputeThresholds();
+    }
+  }
+
   // STATUS
   Serial.println();
   Serial.println("=== STATUS INICIAL ===");
@@ -403,6 +561,9 @@ void loop() {
         Serial.println("[PREP] Aguardando mao parada (gyro<5 dps e accel<1.5 m/s2 por 0.3s)...");
         waitHandStill(300, 5.0f, 1.5f, 2500);
 
+        // pré-roll (NEW)
+        delay(300);
+
         Serial.printf("[CAPTURA] \"%s\" rep %u — iniciando 2s...\n",
                       words[currentWord], r+1);
 
@@ -419,6 +580,11 @@ void loop() {
 
         repDone[currentWord]++;
         ledGreenBlink(1, 80, 60);
+
+        // (NEW) quando completar 2 ou mais réplicas de uma palavra, já atualiza thresholds
+        if (repDone[currentWord] >= 2) {
+          recomputeThresholds();
+        }
 
         if (repDone[currentWord] >= REPS_PER_WORD) {
           Serial.printf("[CAPTURA] Concluidas %u capturas de \"%s\". Siga para a proxima.\n",
@@ -464,11 +630,14 @@ void loop() {
       Serial.println("[PREP] Aguardando mao parada (gyro<5 dps e accel<1.5 m/s2 por 0.3s)...");
       waitHandStill(300, 5.0f, 1.5f, 2500);
 
+      // pré-roll (NEW)
+      delay(300);
+
       Serial.println("[PLAY] Capturando 2s para reconhecimento...");
       WindowMeans probe = captureWindow(WINDOW_MS, SAMPLE_RATE_HZ);
       Serial.printf("[PLAY] probe: gyro|=%.3f accel|=%.3f\n", probe.gyroNorm, probe.accelNorm);
 
-      // ===== k-NN sobre todas as réplicas (gate por dflex + votação ponderada) =====
+      // ===== pool de distâncias =====
       struct Neighbor { uint8_t w, r; float d, dflex, dg, da; };
       std::vector<Neighbor> pool;
       pool.reserve(NUM_WORDS * REPS_PER_WORD);
@@ -511,47 +680,68 @@ void loop() {
       }
       if (gated.empty()) gated = pool; // fallback defensivo
 
-      // pega top-K (K=3)
+      // pega top-K (K=3) para evidência/voto
       const int K = 3;
-      if ((int)gated.size() > K) gated.resize(K);
+      std::vector<Neighbor> topK = gated;
+      if ((int)topK.size() > K) topK.resize(K);
 
-      // log dos vizinhos
-      for (auto& nb : gated) {
+      // log dos vizinhos (como já fazia)
+      for (auto& nb : topK) {
         Serial.printf("[KNN] %-11s rep=%d  d=%.3f (dflex=%.3f dg=%.3f da=%.3f)\n",
           words[nb.w], nb.r+1, nb.d, nb.dflex, nb.dg, nb.da);
       }
 
-      // votação ponderada (1/(d^2))
+      // votação ponderada (1/(d^2)) — só para log/apoio
       float score[NUM_WORDS] = {0};
       const float K_EPS = 1e-6f;
-      for (auto& nb : gated) {
+      for (auto& nb : topK) {
         float wgt = 1.0f / (K_EPS + nb.d * nb.d);
         score[nb.w] += wgt;
       }
 
-      // encontra vencedor e runner-up
-      int winW = -1, runW = -1;
-      float winS = -1, runS = -1;
+      int winWscore=-1, runWscore=-1;
+      float winS=-1, runS=-1;
       for (uint8_t w=0; w<NUM_WORDS; ++w) {
-        if (score[w] > winS) { runS=winS; runW=winW; winS=score[w]; winW=w; }
-        else if (score[w] > runS) { runS=score[w]; runW=w; }
+        if (score[w] > winS) { runS=winS; runWscore=winWscore; winS=score[w]; winWscore=w; }
+        else if (score[w] > runS) { runS=score[w]; runWscore=w; }
       }
 
-      // checa consistência: pelo menos 2 dos top-3 pertencem a winW
+      // ===== decisão por DISTÂNCIA + regras (NEW) =====
+      // top-3 por distância
       int agreeTop3 = 0;
-      for (int i=0; i<(int)gated.size() && i<3; ++i) if (gated[i].w == winW) agreeTop3++;
+      if (pool.size()>=3) {
+        uint8_t l0 = pool[0].w, l1 = pool[1].w, l2 = pool[2].w;
+        agreeTop3 = (l0==l1) + (l0==l2) + (l1==l2); // conta pares iguais
+        // queremos ≥2 ocorrências do mesmo rótulo nos 3 primeiros (equivalente a “ao menos dois são do vencedor”)
+        // maneira simples:
+        int countL0 = (pool[0].w==l0) + (pool[1].w==l0) + (pool[2].w==l0);
+        agreeTop3 = countL0; // 1..3
+      } else if (!pool.empty()) {
+        agreeTop3 = 1;
+      }
 
-      // margem mínima entre 1º e 2º
-      const float MIN_MARGIN = 1.15f; // 15%
-      if (winW>=0 && agreeTop3 >= 2 && winS >= MIN_MARGIN * runS) {
+      // vencedor por distância (o primeiro)
+      const Neighbor& best = pool[0];
+      float d1 = best.d;
+      float d2 = (pool.size()>=2) ? pool[1].d : (d1+1.0f);
+      float margin = (d2 - d1) / (d2 > 1e-9f ? d2 : 1.0f);
+      float thr = gestureThr[best.w] > 0 ? gestureThr[best.w] : DEFAULT_THR;
+
+      bool accept = (d1 <= thr) && (margin >= MARGIN_MIN) && (agreeTop3 >= 2);
+
+      if (accept) {
         Serial.printf("[DECISION] \"%s\"  score=%.3f vs %.3f  top3_agree=%d\n",
-                      words[winW], winS, runS, agreeTop3);
-        if (dfOK) dfPlayer.playMp3Folder(trackOfWord[winW]);
+                      words[best.w], winS, runS, agreeTop3);
+        Serial.printf("[DEBUG] d1=%.3f  d2=%.3f  thr(%s)=%.3f  margin=%.3f\n",
+                      d1, d2, words[best.w], thr, margin);
+        if (dfOK) dfPlayer.playMp3Folder(trackOfWord[best.w]);
         ledGreenBlink(2, 120, 80);
-        oledMsg("Reconhecido:", words[winW]);
+        oledMsg("Reconhecido:", words[best.w]);
       } else {
         Serial.printf("[DECISION] Indefinido  score1=%.3f score2=%.3f  top3_agree=%d\n",
                       winS, runS, agreeTop3);
+        Serial.printf("[DEBUG] d1=%.3f  d2=%.3f  thr(%s)=%.3f  margin=%.3f\n",
+                      d1, d2, words[best.w], thr, margin);
         ledRedBlink(2, 120, 120);
         oledMsg("Nao reconhecido", "");
       }
