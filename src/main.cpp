@@ -46,7 +46,7 @@
 #define SD_SCK_PIN      18
 #define SD_MISO_PIN     19
 #define SD_MOSI_PIN     23
-#define BUTTON_PIN      25   // agora: GRAVA enquanto estiver LOW
+#define BUTTON_PIN      25   // GRAVA enquanto estiver LOW
 #define MODE_SWITCH_PIN 26   // HIGH=CAPTURA  LOW=REPRODUCAO
 #define LED_GREEN_PIN   4
 #define LED_RED_PIN     5
@@ -132,6 +132,29 @@ bool ensureRefsFolder(){
   if(!SD.exists("/refs")) return SD.mkdir("/refs");
   return true;
 }
+
+// apaga todos os CSVs em /refs (para CAPTURA começar limpo)
+bool clearRefsFolder(){
+  if(!sdOK) return false;
+  if(!ensureRefsFolder()) return false;
+  File dir = SD.open("/refs");
+  if(!dir) return false;
+  while(true){
+    File f = dir.openNextFile();
+    if(!f) break;
+    if(!f.isDirectory()){
+      String name = f.name();
+      f.close();
+      SD.remove(name.c_str());
+      Serial.printf("[SD] Removido: %s\n", name.c_str());
+    }else{
+      f.close();
+    }
+  }
+  dir.close();
+  return true;
+}
+
 bool saveCSV(uint8_t w,uint8_t r,const float flex[5],float gyroNorm,float accelNorm){
   if(!sdOK) return false;
   char path[64]; snprintf(path,sizeof(path),"/refs/%s_rep%u.csv",slugs[w],(unsigned)(r+1));
@@ -144,6 +167,81 @@ bool saveCSV(uint8_t w,uint8_t r,const float flex[5],float gyroNorm,float accelN
   f.close();
   Serial.printf("[CAPTURA] Salvo: %s\n",path);
   return true;
+}
+
+// carrega um CSV para uma WindowMeans
+bool loadCSV_toWM(const char* path, float outFlex[5], float& outGyro, float& outAccel){
+  if(!sdOK) return false;
+  File f = SD.open(path, FILE_READ);
+  if(!f){ return false; }
+
+  // inicia com zeros para o caso de arquivo incompleto
+  for(int i=0;i<5;i++) outFlex[i]=0.0f;
+  outGyro=0.0f; outAccel=0.0f;
+
+  while(f.available()){
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if(line.length()==0) continue;
+    if(line.startsWith("sensor")) continue; // cabeçalho
+
+    int comma = line.indexOf(',');
+    if(comma<0) continue;
+    String key = line.substring(0, comma);
+    String sval= line.substring(comma+1);
+    sval.trim();
+    float val = sval.toFloat();
+
+    if     (key=="flex1") outFlex[0]=val;
+    else if(key=="flex2") outFlex[1]=val;
+    else if(key=="flex3") outFlex[2]=val;
+    else if(key=="flex4") outFlex[3]=val;
+    else if(key=="flex5") outFlex[4]=val;
+    else if(key=="gyro_norm")  outGyro = val;
+    else if(key=="accel_norm") outAccel= val;
+  }
+  f.close();
+  return true;
+}
+
+// carrega todos os refs existentes de /refs para os buffers
+bool loadAllRefsFromSD(){
+  if(!sdOK) return false;
+  if(!ensureRefsFolder()) return false;
+
+  // zera RAM
+  memset(meanFlex,0,sizeof(meanFlex));
+  memset(meanGyro,0,sizeof(meanGyro));
+  memset(meanAccel,0,sizeof(meanAccel));
+  memset(repDone,0,sizeof(repDone));
+  currentWord=0;
+
+  uint16_t loaded=0;
+  for(uint8_t w=0; w<NUM_WORDS; w++){
+    for(uint8_t r=0; r<REPS_PER_WORD; r++){
+      char path[64]; snprintf(path,sizeof(path),"/refs/%s_rep%u.csv", slugs[w], (unsigned)(r+1));
+      if(SD.exists(path)){
+        float flex[5]; float g=0,a=0;
+        if(loadCSV_toWM(path, flex, g, a)){
+          for(int i=0;i<5;i++) meanFlex[w][r][i]=flex[i];
+          meanGyro[w][r]=g;
+          meanAccel[w][r]=a;
+          if(repDone[w] < r+1) repDone[w] = r+1; // marca quantas reps tem dessa palavra
+          loaded++;
+          Serial.printf("[SD] Carregado: %s\n", path);
+        }
+      }
+    }
+  }
+
+  // ajusta currentWord para próxima palavra faltante (apenas por organização)
+  for(uint8_t w=0; w<NUM_WORDS; w++){
+    if(repDone[w] < REPS_PER_WORD){ currentWord = w; break; }
+    if(w==NUM_WORDS-1) currentWord = NUM_WORDS; // todas completas
+  }
+
+  Serial.printf("[SD] Total de referencias carregadas: %u\n", loaded);
+  return (loaded>0);
 }
 
 // ======================= Feature window =======================
@@ -180,7 +278,6 @@ struct Recorder {
     sumFlex[0]=sumFlex[1]=sumFlex[2]=sumFlex[3]=sumFlex[4]=0;
     sumGyro=0; sumAccel=0; n=0;
   }
-  // chama em loop; amostra a cada 1/SAMPLE_RATE_HZ
   void tick(){
     if(!active) return;
     uint32_t now=millis();
@@ -205,15 +302,9 @@ struct Recorder {
       float gnorm=sqrtf(gx*gx+gy*gy+gz*gz);
       float anorm=sqrtf(ax*ax+ay*ay+az*az);
 
-      // só acumula após descarte inicial
       if(now - tStart >= DISCARD_MS){
         sumFlex[0]+=f1; sumFlex[1]+=f2; sumFlex[2]+=f3; sumFlex[3]+=f4; sumFlex[4]+=f5;
         sumGyro+=gnorm; sumAccel+=anorm; n++;
-      }
-
-      // limite de segurança
-      if(MAX_HOLD_MS>0 && (now - tStart) > MAX_HOLD_MS){
-        // força um "stop" externo (o loop vai chamar stop() ao soltar)
       }
     }
   }
@@ -240,7 +331,6 @@ void resetCaptureSession(bool announce=true){
   currentWord=0;
   if(announce){
     Serial.println("[CAPTURA] Nova sessão: segure o botão para gravar; solte para salvar.");
-    // Mostra já o próximo alvo/rep no display
     oledMsg("CAPTURA", String(words[currentWord])+" rep 1 (pronto)");
   }
 }
@@ -294,8 +384,15 @@ void setup(){
   Serial.println("Botão: segurar=gravar  soltar=finaliza janela");
   Serial.println();
 
-  if(readMode()==CAPTURE) resetCaptureSession(true);
-  else { oledMsg("REPRODUCAO","Segure para ler"); }
+  Mode modeStart = readMode();
+  if(modeStart==CAPTURE){
+    if(sdOK){ clearRefsFolder(); }   // sobrescrever refs antigos
+    resetCaptureSession(true);
+  }else{
+    bool ok = loadAllRefsFromSD();
+    if(!ok) Serial.println("[PLAY] Aviso: nenhuma referencia encontrada em /refs.");
+    oledMsg("REPRODUCAO","Segure para ler");
+  }
 }
 
 // ======================= Loop =======================
@@ -310,10 +407,14 @@ void loop(){
   // detecção de troca de modo
   if(mode!=lastMode){
     if(mode==CAPTURE){
+      if(sdOK){ clearRefsFolder(); }
       resetCaptureSession(true);
-      lastShownWord = -1;  // reseta o cache de prompt
+      lastShownWord = -1;
       lastShownRep  = -1;
     } else {
+      // ao entrar em PLAY, recarrega do SD (usa sempre o persistido)
+      bool ok = loadAllRefsFromSD();
+      if(!ok) Serial.println("[PLAY] Sem referencias no SD. Faça CAPTURA primeiro.");
       oledMsg("REPRODUCAO","Segure para ler");
       Serial.println("[PLAY] Segure o botão para gravar o gesto; solte para classificar.");
     }
@@ -342,11 +443,10 @@ void loop(){
       // Início de gravação
       if(btn.pressedEdge()){
         ledGreen(true);
-        // Mostra antes de iniciar a coleta
         oledMsg("CAPTURA", String(words[currentWord])+" (gravando)");
         Serial.printf("[CAPTURA] Gravando \"%s\" rep %u... (segure)\n",
                       words[currentWord], repDone[currentWord]+1);
-        if(dfOK) dfPlayer.playMp3Folder(trackOfWord[currentWord]); // fala a palavra-alvo
+        if(dfOK) dfPlayer.playMp3Folder(trackOfWord[currentWord]);
         rec.start();
       }
 
@@ -379,15 +479,13 @@ void loop(){
           }
           if(currentWord<NUM_WORDS){
             oledMsg("CAPTURA", String(words[currentWord])+" rep "+String(repDone[currentWord]+1)+" (pronto)");
-            lastShownWord = -1; lastShownRep = -1; // força refresh se precisar
+            lastShownWord = -1; lastShownRep = -1;
           }else{
             oledMsg("CAPTURA","Concluida — troque de modo");
             Serial.println("[CAPTURA] Sessão concluída. Mude o switch para REPRODUCAO.");
           }
         }
       }
-    }else{
-      // tudo concluído — aguardando troca de modo
     }
 
   // ====== REPRODUÇÃO ======
@@ -410,7 +508,7 @@ void loop(){
       bool haveAny=false;
       for(uint8_t w=0;w<NUM_WORDS;w++) if(repDone[w]>0) { haveAny=true; break; }
       if(!haveAny || !rec.enough()){
-        if(!haveAny) Serial.println("[PLAY] Sem referências. Capture antes.");
+        if(!haveAny) Serial.println("[PLAY] Sem referencias no SD. Capture antes.");
         if(!rec.enough()) Serial.println("[PLAY] Janela curta/insuficiente — descartada.");
         oledMsg("REPRODUCAO", haveAny?"Muito curto":"Sem refs");
         ledRedBlink(2);
@@ -457,7 +555,6 @@ void loop(){
       float score[NUM_WORDS]={0};
       const float KNN_EPS = 1e-6f;
       for(auto& nb: gated){
-        // Corrigido para usar KNN_EPS (evita colisão com macro EPS do SDK)
         float wgt = 1.0f / (KNN_EPS + nb.d * nb.d);
         score[nb.w]+=wgt;
       }
