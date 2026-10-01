@@ -58,6 +58,7 @@ static ExperimentState experimentState = ExperimentState::Ready;
 static uint32_t stateStartedAt = 0;
 static uint32_t lastAudioErrorBlinkAt = 0;
 static bool audioErrorLedOn = false;
+static int lastSwitchLevel = -1;
 
 struct DebouncedButton {
   bool stable = false;
@@ -106,6 +107,64 @@ static void ledRed(bool on) {
 
 static Mode readMode() {
   return (digitalRead(MODE_SWITCH_PIN) == HIGH) ? Mode::Config : Mode::Experiment;
+}
+
+static const char* modeNameForLevel(int level) {
+  return level == HIGH ? "CONFIGURACAO" : "EXPERIMENTO";
+}
+
+static void logSwitchChange(int level) {
+  Serial.printf("[SWITCH] GPIO26=%d -> %s\r\n", level, modeNameForLevel(level));
+}
+
+static const char* dfPlayerTypeName(uint8_t type) {
+  switch (type) {
+    case TimeOut: return "TIMEOUT";
+    case WrongStack: return "WRONG_STACK";
+    case DFPlayerCardInserted: return "CARD_INSERTED";
+    case DFPlayerCardRemoved: return "CARD_REMOVED";
+    case DFPlayerCardOnline: return "CARD_ONLINE";
+    case DFPlayerPlayFinished: return "PLAY_FINISHED";
+    case DFPlayerError: return "ERROR";
+    case DFPlayerUSBInserted: return "USB_INSERTED";
+    case DFPlayerUSBRemoved: return "USB_REMOVED";
+    case DFPlayerUSBOnline: return "USB_ONLINE";
+    case DFPlayerCardUSBOnline: return "CARD_USB_ONLINE";
+    case DFPlayerFeedBack: return "FEEDBACK";
+    default: return "UNKNOWN";
+  }
+}
+
+static const char* dfPlayerErrorName(uint16_t value) {
+  switch (value) {
+    case Busy: return "BUSY";
+    case Sleeping: return "SLEEPING";
+    case SerialWrongStack: return "SERIAL_WRONG_STACK";
+    case CheckSumNotMatch: return "CHECKSUM_NOT_MATCH";
+    case FileIndexOut: return "FILE_INDEX_OUT";
+    case FileMismatch: return "FILE_MISMATCH";
+    case Advertise: return "ADVERTISE";
+    default: return "UNKNOWN_ERROR";
+  }
+}
+
+static void pollDfPlayerDiagnostics() {
+  if (!dfOK) {
+    return;
+  }
+
+  while (dfPlayer.available()) {
+    const uint8_t type = dfPlayer.readType();
+    const uint16_t value = dfPlayer.read();
+    if (type == DFPlayerError) {
+      Serial.printf("[DFP] EVENT type=%s value=%u (%s)\r\n",
+                    dfPlayerTypeName(type),
+                    value,
+                    dfPlayerErrorName(value));
+    } else {
+      Serial.printf("[DFP] EVENT type=%s value=%u\r\n", dfPlayerTypeName(type), value);
+    }
+  }
 }
 
 static void showLines(const char* line1, const char* line2 = "") {
@@ -197,6 +256,7 @@ static void showResultAndPlay() {
                 scenario.track);
 
   if (dfOK) {
+    Serial.printf("[DFP] PLAY track=%u arquivo=/mp3/%04u.mp3\r\n", scenario.track, scenario.track);
     dfPlayer.playMp3Folder(scenario.track);
   } else {
     Serial.println("[DFP] Track nao tocada: DFPlayer indisponivel");
@@ -222,7 +282,7 @@ void setup() {
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(MODE_SWITCH_PIN, INPUT);
+  pinMode(MODE_SWITCH_PIN, INPUT_PULLUP);
 
   ledGreen(false);
   ledRed(false);
@@ -231,6 +291,8 @@ void setup() {
   delay(150);
   Serial.println();
   Serial.println("[BOOT] Sign Gloves Explorer 2026");
+  lastSwitchLevel = digitalRead(MODE_SWITCH_PIN);
+  Serial.printf("[SWITCH] GPIO26=%d\r\n", lastSwitchLevel);
 
   Wire.begin(OLED_SDA, OLED_SCL);
   oledOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
@@ -255,6 +317,14 @@ void setup() {
 }
 
 void loop() {
+  pollDfPlayerDiagnostics();
+
+  const int switchLevel = digitalRead(MODE_SWITCH_PIN);
+  if (switchLevel != lastSwitchLevel) {
+    lastSwitchLevel = switchLevel;
+    logSwitchChange(switchLevel);
+  }
+
   const Mode nextMode = readMode();
   if (nextMode != currentMode) {
     handleModeChange(nextMode);
